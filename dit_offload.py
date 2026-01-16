@@ -1,3 +1,4 @@
+# (updated for display scaling)
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import tkinter as tk
@@ -11,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 import re
 import sys
+import platform
+import ctypes
 
 # ==================== LOGGER ====================
 class DITLogger:
@@ -285,17 +288,30 @@ class ProfessionalDITApp(ctk.CTk):
         
         self.logger = DITLogger()
         self.config = ConfigManager.load()
+        # read scaling from config (default 1.0)
+        try:
+            self.scale = float(self.config.get("scaling", 1.0))
+        except Exception:
+            self.scale = 1.0
+        # clamp scale to reasonable range
+        self.scale = max(0.5, min(self.scale, 3.0))
+        
         self.engine = None
         self.transfer_thread = None
         self.is_transferring = False
         
+        self.apply_scaling()
         self.check_dependencies()
         
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         
         self.title("DIT Pro v2.0 | Secure Media Transfer")
-        self.geometry("1100x850")
+        # scale geometry
+        base_w, base_h = 1100, 850
+        w = int(base_w * self.scale)
+        h = int(base_h * self.scale)
+        self.geometry(f"{w}x{h}")
         self.resizable(False, False)
         
         self.setup_ui()
@@ -305,6 +321,45 @@ class ProfessionalDITApp(ctk.CTk):
         self.logger.info("="*60)
         self.logger.info("DIT Pro v2.0 Started")
         self.logger.info("="*60)
+    
+    def apply_scaling(self):
+        """Apply DPI / Tk scaling and attempt to use customtkinter widget scaling."""
+        # Set Windows DPI awareness where possible
+        try:
+            if platform.system() == "Windows":
+                # Try SetProcessDpiAwarenessContext (Windows 10+)
+                try:
+                    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+                    ctypes.windll.user32.SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+                except Exception:
+                    try:
+                        ctypes.windll.user32.SetProcessDPIAware()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        
+        # set tkinter scaling (affects fonts and many widget sizes)
+        try:
+            # tk scaling is typically 1.0 = 72 dpi baseline, so use our scale directly
+            self.tk.call('tk', 'scaling', self.scale)
+        except Exception:
+            pass
+        
+        # If customtkinter provides a widget scaling helper, try to call it (best-effort)
+        try:
+            if hasattr(ctk, "set_widget_scaling"):
+                ctk.set_widget_scaling(self.scale)
+        except Exception:
+            pass
+    
+    def s(self, val):
+        """Scale integer sizes (heights, widths, paddings)."""
+        return max(1, int(round(val * self.scale)))
+    
+    def sf(self, val):
+        """Scale font sizes."""
+        return max(1, int(round(val * self.scale)))
     
     def check_dependencies(self):
         missing = []
@@ -326,133 +381,133 @@ class ProfessionalDITApp(ctk.CTk):
     
     def setup_ui(self):
         # Header
-        header = ctk.CTkFrame(self, height=80, fg_color="#1a1a1a")
-        header.pack(fill="x", pady=(0, 20))
+        header = ctk.CTkFrame(self, height=self.s(80), fg_color="#1a1a1a")
+        header.pack(fill="x", pady=(0, self.s(20)))
         
-        title = ctk.CTkLabel(header, text="DIT PRO", font=("Helvetica", 32, "bold"), text_color="#00d4ff")
-        title.pack(side="left", padx=20, pady=20)
+        title = ctk.CTkLabel(header, text="DIT PRO", font=("Helvetica", self.sf(32), "bold"), text_color="#00d4ff")
+        title.pack(side="left", padx=self.s(20), pady=self.s(20))
         
-        subtitle = ctk.CTkLabel(header, text="Professional Rclone + ASC-MHL Workflow", font=("Helvetica", 12), text_color="#888")
-        subtitle.pack(side="left", padx=(0, 20))
+        subtitle = ctk.CTkLabel(header, text="Professional Rclone + ASC-MHL Workflow", font=("Helvetica", self.sf(12)), text_color="#888")
+        subtitle.pack(side="left", padx=(0, self.s(20)))
         
-        version = ctk.CTkLabel(header, text="v2.0", font=("Courier", 10), text_color="#444")
-        version.pack(side="right", padx=20)
+        version = ctk.CTkLabel(header, text="v2.0", font=("Courier", self.sf(10)), text_color="#444")
+        version.pack(side="right", padx=self.s(20))
         
         # Main container
         main = ctk.CTkFrame(self, fg_color="transparent")
-        main.pack(fill="both", expand=True, padx=30)
+        main.pack(fill="both", expand=True, padx=self.s(30))
         
         # Left panel
-        left_panel = ctk.CTkFrame(main, width=480, fg_color="#242424")
-        left_panel.pack(side="left", fill="both", padx=(0, 15))
+        left_panel = ctk.CTkFrame(main, width=self.s(480), fg_color="#242424")
+        left_panel.pack(side="left", fill="both", padx=(0, self.s(15)))
         
         # Source section
-        ctk.CTkLabel(left_panel, text="SOURCE MEDIA", font=("Helvetica", 14, "bold")).pack(pady=(20, 5))
-        self.src_display = ctk.CTkTextbox(left_panel, height=60, fg_color="#1a1a1a", font=("Courier", 10), wrap="word")
-        self.src_display.pack(padx=20, pady=5, fill="x")
+        ctk.CTkLabel(left_panel, text="SOURCE MEDIA", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(20), self.s(5)))
+        self.src_display = ctk.CTkTextbox(left_panel, height=self.s(60), fg_color="#1a1a1a", font=("Courier", self.sf(10)), wrap="word")
+        self.src_display.pack(padx=self.s(20), pady=self.s(5), fill="x")
         self.src_display.insert("1.0", "No source selected")
         self.src_display.configure(state="disabled")
         
-        ctk.CTkButton(left_panel, text="Browse Source", command=lambda: self.browse("src"), height=35,
-                     fg_color="#2d5a7b", hover_color="#3a7099").pack(pady=5)
+        ctk.CTkButton(left_panel, text="Browse Source", command=lambda: self.browse("src"), height=self.s(35),
+                     fg_color="#2d5a7b", hover_color="#3a7099").pack(pady=self.s(5))
         
-        self.src_info = ctk.CTkLabel(left_panel, text="0 files | 0 GB", text_color="#666", font=("Courier", 10))
-        self.src_info.pack(pady=5)
+        self.src_info = ctk.CTkLabel(left_panel, text="0 files | 0 GB", text_color="#666", font=("Courier", self.sf(10)))
+        self.src_info.pack(pady=self.s(5))
         
         # Destination 1
-        ctk.CTkLabel(left_panel, text="DESTINATION 1 (Primary)", font=("Helvetica", 14, "bold")).pack(pady=(30, 5))
-        self.dst1_display = ctk.CTkTextbox(left_panel, height=60, fg_color="#1a1a1a", font=("Courier", 10), wrap="word")
-        self.dst1_display.pack(padx=20, pady=5, fill="x")
+        ctk.CTkLabel(left_panel, text="DESTINATION 1 (Primary)", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(30), self.s(5)))
+        self.dst1_display = ctk.CTkTextbox(left_panel, height=self.s(60), fg_color="#1a1a1a", font=("Courier", self.sf(10)), wrap="word")
+        self.dst1_display.pack(padx=self.s(20), pady=self.s(5), fill="x")
         self.dst1_display.insert("1.0", "No destination selected")
         self.dst1_display.configure(state="disabled")
         
-        ctk.CTkButton(left_panel, text="Browse Destination 1", command=lambda: self.browse("dst1"), height=35,
-                     fg_color="#2d5a7b", hover_color="#3a7099").pack(pady=5)
+        ctk.CTkButton(left_panel, text="Browse Destination 1", command=lambda: self.browse("dst1"), height=self.s(35),
+                     fg_color="#2d5a7b", hover_color="#3a7099").pack(pady=self.s(5))
         
         # Destination 2
-        ctk.CTkLabel(left_panel, text="DESTINATION 2 (Backup)", font=("Helvetica", 14, "bold")).pack(pady=(30, 5))
-        self.dst2_display = ctk.CTkTextbox(left_panel, height=60, fg_color="#1a1a1a", font=("Courier", 10), wrap="word")
-        self.dst2_display.pack(padx=20, pady=5, fill="x")
+        ctk.CTkLabel(left_panel, text="DESTINATION 2 (Backup)", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(30), self.s(5)))
+        self.dst2_display = ctk.CTkTextbox(left_panel, height=self.s(60), fg_color="#1a1a1a", font=("Courier", self.sf(10)), wrap="word")
+        self.dst2_display.pack(padx=self.s(20), pady=self.s(5), fill="x")
         self.dst2_display.insert("1.0", "No destination selected")
         self.dst2_display.configure(state="disabled")
         
-        ctk.CTkButton(left_panel, text="Browse Destination 2", command=lambda: self.browse("dst2"), height=35,
-                     fg_color="#2d5a7b", hover_color="#3a7099").pack(pady=5)
+        ctk.CTkButton(left_panel, text="Browse Destination 2", command=lambda: self.browse("dst2"), height=self.s(35),
+                     fg_color="#2d5a7b", hover_color="#3a7099").pack(pady=self.s(5))
         
         # Transfer options
-        ctk.CTkLabel(left_panel, text="TRANSFER OPTIONS", font=("Helvetica", 14, "bold")).pack(pady=(30, 5))
+        ctk.CTkLabel(left_panel, text="TRANSFER OPTIONS", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(30), self.s(5)))
         
         transfers_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
-        transfers_frame.pack(padx=20, pady=5, fill="x")
+        transfers_frame.pack(padx=self.s(20), pady=self.s(5), fill="x")
         ctk.CTkLabel(transfers_frame, text="Parallel Transfers:").pack(side="left")
         self.transfers_var = tk.StringVar(value="4")
         transfers_spinbox = ctk.CTkOptionMenu(transfers_frame, values=["1", "2", "4", "8", "16"], 
-                                            variable=self.transfers_var, width=60)
+                                            variable=self.transfers_var, width=self.s(60))
         transfers_spinbox.pack(side="right")
         
         # Control buttons
         button_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
-        button_frame.pack(pady=30)
+        button_frame.pack(pady=self.s(30))
         
         self.start_btn = ctk.CTkButton(button_frame, text="START TRANSFER", command=self.start_transfer,
-                                      height=45, fg_color="#28a745", hover_color="#218838", 
-                                      font=("Helvetica", 14, "bold"))
-        self.start_btn.pack(pady=5, fill="x")
+                                      height=self.s(45), fg_color="#28a745", hover_color="#218838", 
+                                      font=("Helvetica", self.sf(14), "bold"))
+        self.start_btn.pack(pady=self.s(5), fill="x")
         
         self.stop_btn = ctk.CTkButton(button_frame, text="STOP TRANSFER", command=self.stop_transfer,
-                                     height=35, fg_color="#dc3545", hover_color="#c82333",
+                                     height=self.s(35), fg_color="#dc3545", hover_color="#c82333",
                                      state="disabled")
-        self.stop_btn.pack(pady=5, fill="x")
+        self.stop_btn.pack(pady=self.s(5), fill="x")
         
         # Right panel
         right_panel = ctk.CTkFrame(main, fg_color="#242424")
         right_panel.pack(side="right", fill="both", expand=True)
         
         # Progress section
-        ctk.CTkLabel(right_panel, text="TRANSFER PROGRESS", font=("Helvetica", 14, "bold")).pack(pady=(20, 5))
+        ctk.CTkLabel(right_panel, text="TRANSFER PROGRESS", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(20), self.s(5)))
         
-        self.progress_bar = ctk.CTkProgressBar(right_panel, height=20)
-        self.progress_bar.pack(padx=20, pady=10, fill="x")
+        self.progress_bar = ctk.CTkProgressBar(right_panel, height=self.s(20))
+        self.progress_bar.pack(padx=self.s(20), pady=self.s(10), fill="x")
         self.progress_bar.set(0)
         
-        self.progress_label = ctk.CTkLabel(right_panel, text="0%", font=("Helvetica", 16, "bold"))
+        self.progress_label = ctk.CTkLabel(right_panel, text="0%", font=("Helvetica", self.sf(16), "bold"))
         self.progress_label.pack()
         
         # Current file
-        ctk.CTkLabel(right_panel, text="CURRENT FILE", font=("Helvetica", 12, "bold")).pack(pady=(20, 5))
+        ctk.CTkLabel(right_panel, text="CURRENT FILE", font=("Helvetica", self.sf(12), "bold")).pack(pady=(self.s(20), self.s(5)))
         self.current_file_label = ctk.CTkLabel(right_panel, text="Waiting...", text_color="#888", 
-                                              font=("Courier", 10), wraplength=400)
-        self.current_file_label.pack(pady=5)
+                                              font=("Courier", self.sf(10)), wraplength=self.s(400))
+        self.current_file_label.pack(pady=self.s(5))
         
         # Stats frame
         stats_frame = ctk.CTkFrame(right_panel, fg_color="transparent")
-        stats_frame.pack(pady=20, fill="x", padx=20)
+        stats_frame.pack(pady=self.s(20), fill="x", padx=self.s(20))
         
-        ctk.CTkLabel(stats_frame, text="SPEED:").pack(side="left", padx=5)
-        self.speed_label = ctk.CTkLabel(stats_frame, text="0 MB/s", text_color="#00d4ff", font=("Courier", 12))
-        self.speed_label.pack(side="left", padx=(0, 20))
+        ctk.CTkLabel(stats_frame, text="SPEED:").pack(side="left", padx=self.s(5))
+        self.speed_label = ctk.CTkLabel(stats_frame, text="0 MB/s", text_color="#00d4ff", font=("Courier", self.sf(12)))
+        self.speed_label.pack(side="left", padx=(0, self.s(20)))
         
-        ctk.CTkLabel(stats_frame, text="ETA:").pack(side="left", padx=5)
-        self.eta_label = ctk.CTkLabel(stats_frame, text="--:--:--", text_color="#00d4ff", font=("Courier", 12))
+        ctk.CTkLabel(stats_frame, text="ETA:").pack(side="left", padx=self.s(5))
+        self.eta_label = ctk.CTkLabel(stats_frame, text="--:--:--", text_color="#00d4ff", font=("Courier", self.sf(12)))
         self.eta_label.pack(side="left")
         
         # Log display
-        ctk.CTkLabel(right_panel, text="TRANSFER LOG", font=("Helvetica", 14, "bold")).pack(pady=(20, 5))
-        self.log_display = ctk.CTkTextbox(right_panel, height=300, fg_color="#1a1a1a", 
-                                         font=("Courier", 10), wrap="word")
-        self.log_display.pack(padx=20, pady=10, fill="both", expand=True)
+        ctk.CTkLabel(right_panel, text="TRANSFER LOG", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(20), self.s(5)))
+        self.log_display = ctk.CTkTextbox(right_panel, height=self.s(300), fg_color="#1a1a1a", 
+                                         font=("Courier", self.sf(10)), wrap="word")
+        self.log_display.pack(padx=self.s(20), pady=self.s(10), fill="both", expand=True)
         self.log_display.insert("1.0", "Log initialized. Ready for transfer.\n")
         self.log_display.configure(state="disabled")
         
         # Status bar
-        status_bar = ctk.CTkFrame(self, height=40, fg_color="#1a1a1a")
-        status_bar.pack(fill="x", side="bottom", pady=(10, 0))
+        status_bar = ctk.CTkFrame(self, height=self.s(40), fg_color="#1a1a1a")
+        status_bar.pack(fill="x", side="bottom", pady=(self.s(10), 0))
         
         self.status_label = ctk.CTkLabel(status_bar, text="Ready", text_color="#00d4ff")
-        self.status_label.pack(side="left", padx=20)
+        self.status_label.pack(side="left", padx=self.s(20))
         
-        self.log_path_label = ctk.CTkLabel(status_bar, text="", text_color="#666", font=("Courier", 9))
-        self.log_path_label.pack(side="right", padx=20)
+        self.log_path_label = ctk.CTkLabel(status_bar, text="", text_color="#666", font=("Courier", self.sf(9)))
+        self.log_path_label.pack(side="right", padx=self.s(20))
     
     def browse(self, target):
         """Browse for directory"""
@@ -636,6 +691,12 @@ class ProfessionalDITApp(ctk.CTk):
             dst1 = self.config.get("dst1", "")
             dst2 = self.config.get("dst2", "")
             transfers = self.config.get("transfers", "4")
+            # update scale from config in case it changed
+            try:
+                self.scale = float(self.config.get("scaling", self.scale))
+            except Exception:
+                pass
+            self.scale = max(0.5, min(self.scale, 3.0))
             
             if src:
                 self.src_display.configure(state="normal")
@@ -664,7 +725,8 @@ class ProfessionalDITApp(ctk.CTk):
             "src": self.src_display.get("1.0", "end-1c").strip() if self.src_display.get("1.0", "end-1c") != "No source selected" else "",
             "dst1": self.dst1_display.get("1.0", "end-1c").strip() if self.dst1_display.get("1.0", "end-1c") != "No destination selected" else "",
             "dst2": self.dst2_display.get("1.0", "end-1c").strip() if self.dst2_display.get("1.0", "end-1c") != "No destination selected" else "",
-            "transfers": self.transfers_var.get()
+            "transfers": self.transfers_var.get(),
+            "scaling": self.scale
         }
         ConfigManager.save(config)
     
