@@ -1046,4 +1046,3 @@ class ProfessionalDITApp(ctk.CTk):
 if __name__ == "__main__":
     app = ProfessionalDITApp()
     app.mainloop()
-```
