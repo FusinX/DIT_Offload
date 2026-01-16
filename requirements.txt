@@ -1,0 +1,126 @@
+# Requirements for DIT Pro v2.0
+
+## Python Requirements (`requirements.txt`)
+
+```txt
+customtkinter>=5.2.0
+```
+
+## System Dependencies (not installable via pip)
+
+### Required System Tools:
+1. **rclone** (version 1.60.0 or higher recommended)
+   - Download: https://rclone.org/downloads/
+   
+2. **ascmhl** (ASC Media Hash List tools)
+   - Download: https://github.com/ascmitc/mhl
+
+### Optional but Recommended:
+3. **Python 3.7 or higher** (for f-string support and modern features)
+
+## Installation Script
+
+For convenience, here's a complete installation script:
+
+### **Windows Installation:**
+```powershell
+# Install Python package
+pip install customtkinter
+
+# Download rclone from: https://rclone.org/downloads/
+# Download ascmhl from: https://github.com/ascmitc/mhl
+# Add both to your system PATH
+```
+
+### **macOS Installation:**
+```bash
+# Install Homebrew if not installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install dependencies
+brew install rclone
+brew install ascmhl
+
+# Install Python package
+pip3 install customtkinter
+```
+
+### **Linux (Ubuntu/Debian) Installation:**
+```bash
+# Install system dependencies
+sudo apt update
+sudo apt install -y rclone python3-tk
+
+# Install Python package
+pip3 install customtkinter
+
+# Install ascmhl (check latest release)
+# Download from: https://github.com/ascmitc/mhl/releases
+# Example:
+# wget https://github.com/ascmitc/mhl/releases/download/vX.X.X/ascmhl-linux-amd64
+# chmod +x ascmhl-linux-amd64
+# sudo mv ascmhl-linux-amd64 /usr/local/bin/ascmhl
+```
+
+## Verification
+
+After installation, verify all dependencies:
+
+```bash
+# Check Python package
+python -c "import customtkinter; print('✓ customtkinter installed')"
+
+# Check system tools
+rclone version
+ascmhl --version  # or ascmhl -h for help
+
+# Check Python version (should be 3.7+)
+python --version
+```
+
+## Development Dependencies (Optional)
+
+If you plan to modify the code, these additional tools are recommended:
+
+```txt
+# For development (requirements-dev.txt)
+customtkinter>=5.2.0
+black>=23.0.0        # Code formatting
+flake8>=6.0.0        # Linting
+pytest>=7.0.0        # Testing
+```
+
+## Notes
+
+1. **Tkinter Issues**: On some Linux distributions, you may need to install `python3-tk` separately:
+   ```bash
+   sudo apt install python3-tk  # Ubuntu/Debian
+   sudo dnf install python3-tkinter  # Fedora/RHEL
+   ```
+
+2. **PATH Configuration**: Ensure `rclone` and `ascmhl` are in your system PATH, or place them in the same directory as the script.
+
+3. **Permissions**: On Linux/macOS, you may need to make downloaded binaries executable:
+   ```bash
+   chmod +x rclone
+   chmod +x ascmhl
+   ```
+
+## Troubleshooting
+
+If you encounter issues:
+
+1. **"ModuleNotFoundError: No module named 'customtkinter'"**:
+   ```bash
+   pip install --upgrade customtkinter
+   ```
+
+2. **"rclone/ascmhl not found"**:
+   - Verify they are installed: `which rclone` or `where rclone` (Windows)
+   - Add installation directories to system PATH
+
+3. **GUI doesn't open**:
+   ```bash
+   # Check Tkinter installation
+   python -m tkinter  # Should open a test window
+   ```
