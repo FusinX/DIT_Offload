@@ -117,27 +117,102 @@ class TransferEngine:
     
     def parse_rclone_progress(self, line):
         """Extract progress info from rclone output"""
+        # First, handle the aggregated "Transferred:" line which usually contains
+        # overall percentage, speed, and ETA separated by commas.
         if "Transferred:" in line:
             try:
-                percentage_match = re.search(r'(\d+)%', line)
-                percentage = int(percentage_match.group(1)) if percentage_match else 0
+                # Split on commas and trim
+                parts = [p.strip() for p in line.split(',')]
+                percentage = None
+                speed = None
+                eta = None
                 
-                speed_match = re.search(r'([\d.]+)\s*([KMG]i?B)/s', line)
-                speed = f"{speed_match.group(1)} {speed_match.group(2)}/s" if speed_match else "0 MB/s"
+                for p in parts:
+                    # Percentage field usually looks like "61%"
+                    m_pct = re.search(r'(\d{1,3})\%', p)
+                    if m_pct and percentage is None:
+                        try:
+                            percentage = int(m_pct.group(1))
+                        except Exception:
+                            percentage = 0
+                        continue
+                    
+                    # Speed usually contains "/s"
+                    if '/s' in p and speed is None:
+                        speed = p
+                        continue
+                    
+                    # ETA may be prefixed with "ETA" or be a time-like token
+                    if p.upper().startswith('ETA') or re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', p):
+                        # normalize "ETA 00:12:34" or "00:12:34"
+                        m_eta = re.search(r'ETA\s*[:\-]?\s*(\S+)', p, re.IGNORECASE)
+                        if m_eta:
+                            eta = m_eta.group(1)
+                        else:
+                            eta = p
+                        continue
                 
-                eta_match = re.search(r'ETA\s+(\S+)', line)
-                eta = eta_match.group(1) if eta_match else "---"
+                # Fallback defaults
+                if percentage is None:
+                    percentage = 0
+                if speed is None:
+                    speed = "0 B/s"
+                if eta is None:
+                    eta = "---"
+                
+                # Normalize speed string a bit (optional)
+                speed = speed.replace("MBytes", "MB").replace("KBytes", "KB").replace("GBytes", "GB")
                 
                 return ("progress", percentage, speed, eta)
             except Exception as e:
-                self.logger.error(f"Error parsing progress: {e}")
+                self.logger.error(f"Error parsing progress line '{line}': {e}")
+                return None
         
-        if ":" in line and "/" in line:
-            file_match = re.search(r'([^/]+)$', line.strip())
-            if file_match:
-                filename = file_match.group(1).strip()
-                if filename and len(filename) > 3 and "%" not in filename:
+        # Next, attempt to detect per-file progress lines.
+        # Examples:
+        #   path/to/file.mp4:   12% /123M, 1.234M/s, 00:02:34
+        #   2021/.. INFO  : path/to/file.mp4: Copied (new)
+        # We'll try several patterns and take the best match.
+        try:
+            # 1) If there's a file progress with a percent (e.g. "file.mp4: 12%")
+            m = re.search(r'(?P<path>.+?):\s*\d{1,3}%', line)
+            if m:
+                path = m.group('path').strip()
+                # path may include log prefix; choose last path-like segment
+                # find any path-like tokens with extension before a colon
+                file_matches = re.findall(r'([^\s:][^:]*\.[A-Za-z0-9]{1,5})', path)
+                if file_matches:
+                    filename = os.path.basename(file_matches[-1])
+                else:
+                    # fallback to basename of the captured path
+                    filename = os.path.basename(path)
+                if filename and len(filename) > 0:
                     return ("file", filename)
+            
+            # 2) Lines that mention "Copied" or similar often contain filename before the last colon.
+            #    We'll look for something that resembles a filename with an extension followed by a colon.
+            file_matches = re.findall(r'([^\s:][^:]*\.[A-Za-z0-9]{1,5})\:', line)
+            if file_matches:
+                filename = os.path.basename(file_matches[-1])
+                if filename and len(filename) > 0:
+                    return ("file", filename)
+            
+            # 3) As a last resort, if the line contains a slash and ends with a filename-like token, grab that.
+            if ("/" in line or "\\" in line) and ":" in line:
+                # Take segment before the final ':' and try to get basename
+                try:
+                    before_colon = line.rsplit(':', 1)[0]
+                    # find last token that looks like a filename
+                    toks = re.split(r'\s+', before_colon.strip())
+                    for tok in reversed(toks):
+                        if '.' in tok:
+                            filename = os.path.basename(tok.strip())
+                            if filename:
+                                return ("file", filename)
+                except Exception:
+                    pass
+        except Exception as e:
+            self.logger.error(f"Error extracting file from line '{line}': {e}")
         
         return None
     
