@@ -141,7 +141,7 @@ class TransferEngine:
                 eta = None
                 
                 for p in parts:
-                    # Percentage field usually looks like "61%"
+                    # Percentage field usually looks like "61%%"
                     m_pct = re.search(r'(\d{1,3})\%', p)
                     if m_pct and percentage is None:
                         try:
@@ -182,40 +182,27 @@ class TransferEngine:
                 return None
         
         # Next, attempt to detect per-file progress lines.
-        # Examples:
-        #   path/to/file.mp4:   12% /123M, 1.234M/s, 00:02:34
-        #   2021/.. INFO  : path/to/file.mp4: Copied (new)
-        # We'll try several patterns and take the best match.
         try:
-            # 1) If there's a file progress with a percent (e.g. "file.mp4: 12%")
-            m = re.search(r'(?P<path>.+?):\s*\d{1,3}%', line)
+            m = re.search(r'(?P<path>.+?):\s*\d{1,3}%%', line)
             if m:
                 path = m.group('path').strip()
-                # path may include log prefix; choose last path-like segment
-                # find any path-like tokens with extension before a colon
                 file_matches = re.findall(r'([^\s:][^:]*\.[A-Za-z0-9]{1,5})', path)
                 if file_matches:
                     filename = os.path.basename(file_matches[-1])
                 else:
-                    # fallback to basename of the captured path
                     filename = os.path.basename(path)
                 if filename and len(filename) > 0:
                     return ("file", filename)
             
-            # 2) Lines that mention "Copied" or similar often contain filename before the last colon.
-            #    We'll look for something that resembles a filename with an extension followed by a colon.
-            file_matches = re.findall(r'([^\s:][^:]*\.[A-Za-z0-9]{1,5})\:', line)
+            file_matches = re.findall(r'([^\s:][^:]*\.[A-Za-z0-9]{1,5}):', line)
             if file_matches:
                 filename = os.path.basename(file_matches[-1])
                 if filename and len(filename) > 0:
                     return ("file", filename)
             
-            # 3) As a last resort, if the line contains a slash and ends with a filename-like token, grab that.
             if ("/" in line or "\\" in line) and ":" in line:
-                # Take segment before the final ':' and try to get basename
                 try:
                     before_colon = line.rsplit(':', 1)[0]
-                    # find last token that looks like a filename
                     toks = re.split(r'\s+', before_colon.strip())
                     for tok in reversed(toks):
                         if '.' in tok:
@@ -283,7 +270,6 @@ class TransferEngine:
             try:
                 self.process.wait(timeout=5)
             except Exception:
-                # if it didn't exit gracefully, try to terminate
                 try:
                     self.process.terminate()
                     self.process.wait(timeout=5)
@@ -340,8 +326,6 @@ class TransferEngine:
             combined_output = (result.stderr or "") + "\n" + (result.stdout or "")
             self.logger.info(f"rclone check (checksum) exit {result.returncode}. Output:\n{combined_output}")
             
-            # Heuristic: if the output mentions "hash", "checksum", "not supported", "no md5", "unable to compute" etc,
-            # fall back to a non-checksum check (size/mod-time based).
             if re.search(r'no .*hash|no .*checksum|hash .*not supported|cannot .*checksum|unable to compute|not supported', combined_output, re.I):
                 self.logger.warning("Checksum verification not supported for these remotes/filesystems. Falling back to size/modtime check.")
                 self.ui_callback("log", "Checksum verification not available; falling back to size/modtime verification", "WARNING")
@@ -360,7 +344,6 @@ class TransferEngine:
                     self.logger.error(f"rclone check (fallback) exit {result2.returncode}. Output:\n{combined_output2}")
                     raise ValueError("Verification failed: Files do not match")
             else:
-                # No obvious checksum-support issue: fail and show diagnosis
                 self.logger.error(f"rclone check reported mismatches or error:\n{combined_output}")
                 raise ValueError("Verification failed: Files do not match")
             
@@ -482,12 +465,10 @@ class ProfessionalDITApp(ctk.CTk):
         
         self.logger = DITLogger()
         self.config = ConfigManager.load()
-        # read scaling from config (default 1.0)
         try:
             self.scale = float(self.config.get("scaling", 1.0))
         except Exception:
             self.scale = 1.0
-        # clamp scale to reasonable range
         self.scale = max(0.5, min(self.scale, 3.0))
         
         self.engine = None
@@ -515,18 +496,17 @@ class ProfessionalDITApp(ctk.CTk):
         ctk.set_default_color_theme("blue")
         
         self.title("DIT Pro v2.0 | Secure Media Transfer")
-        # scale geometry
-        base_w, base_h = 1100, 850
+        base_w, base_h = 1200, 820
         w = int(base_w * self.scale)
         h = int(base_h * self.scale)
         self.geometry(f"{w}x{h}")
         self.resizable(False, False)
         
+        # Build a DaVinci Resolve-like UI: left media/destination column, center big job card, right log/inspectors
         self.setup_ui()
         self.load_saved_config()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # show log path in status bar
         try:
             self.log_path_label.configure(text=str(self.logger.log_file))
         except Exception:
@@ -537,11 +517,8 @@ class ProfessionalDITApp(ctk.CTk):
         self.logger.info("="*60)
     
     def apply_scaling(self):
-        """Apply DPI / Tk scaling and attempt to use customtkinter widget scaling."""
-        # Set Windows DPI awareness where possible
         try:
             if platform.system() == "Windows":
-                # Try SetProcessDpiAwarenessContext (Windows 10+)
                 try:
                     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
                     ctypes.windll.user32.SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
@@ -552,15 +529,10 @@ class ProfessionalDITApp(ctk.CTk):
                         pass
         except Exception:
             pass
-        
-        # set tkinter scaling (affects fonts and many widget sizes)
         try:
-            # tk scaling is typically 1.0 = 72 dpi baseline, so use our scale directly
             self.tk.call('tk', 'scaling', self.scale)
         except Exception:
             pass
-        
-        # If customtkinter provides a widget scaling helper, try to call it (best-effort)
         try:
             if hasattr(ctk, "set_widget_scaling"):
                 ctk.set_widget_scaling(self.scale)
@@ -568,11 +540,9 @@ class ProfessionalDITApp(ctk.CTk):
             pass
     
     def s(self, val):
-        """Scale integer sizes (heights, widths, paddings)."""
         return max(1, int(round(val * self.scale)))
     
     def sf(self, val):
-        """Scale font sizes."""
         return max(1, int(round(val * self.scale)))
     
     def check_dependencies(self):
@@ -594,141 +564,131 @@ class ProfessionalDITApp(ctk.CTk):
             messagebox.showwarning("Missing Dependencies", msg)
     
     def setup_ui(self):
-        # Header
-        header = ctk.CTkFrame(self, height=self.s(80), fg_color="#1a1a1a")
-        header.pack(fill="x", pady=(0, self.s(20)))
-        
-        title = ctk.CTkLabel(header, text="DIT PRO", font=("Helvetica", self.sf(32), "bold"), text_color="#00d4ff")
-        title.pack(side="left", padx=self.s(20), pady=self.s(20))
-        
-        subtitle = ctk.CTkLabel(header, text="Professional Rclone + ASC-MHL Workflow", font=("Helvetica", self.sf(12)), text_color="#888")
-        subtitle.pack(side="left", padx=(0, self.s(20)))
-        
-        version = ctk.CTkLabel(header, text="v2.0", font=("Courier", self.sf(10)), text_color="#444")
-        version.pack(side="right", padx=self.s(20))
-        
-        # Main container
-        main = ctk.CTkFrame(self, fg_color="transparent")
-        main.pack(fill="both", expand=True, padx=self.s(30))
-        
-        # Left panel
-        left_panel = ctk.CTkFrame(main, width=self.s(480), fg_color="#242424")
-        left_panel.pack(side="left", fill="both", padx=(0, self.s(15)))
-        
-        # Source section
-        ctk.CTkLabel(left_panel, text="SOURCE MEDIA", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(20), self.s(5)))
-        self.src_display = ctk.CTkTextbox(left_panel, height=self.s(60), fg_color="#1a1a1a", font=("Courier", self.sf(10)), wrap="word")
-        self.src_display.pack(padx=self.s(20), pady=self.s(5), fill="x")
+        """Create a DaVinci Resolve-like UI layout"""  
+        # Top toolbar (minimal)
+        toolbar = ctk.CTkFrame(self, height=self.s(48), fg_color="#111213")
+        toolbar.pack(side="top", fill="x")
+        title_lbl = ctk.CTkLabel(toolbar, text="DIT PRO — Proxy Generator Style", font=("Helvetica", self.sf(14), "bold"), text_color="#00d4ff")
+        title_lbl.pack(side="left", padx=self.s(12))
+        self.status_label = ctk.CTkLabel(toolbar, text="Ready", text_color="#00d4ff")
+        self.status_label.pack(side="right", padx=self.s(12))
+
+        # Main area
+        main = ctk.CTkFrame(self, fg_color="#0f1112")
+        main.pack(fill="both", expand=True, padx=self.s(12), pady=self.s(8))
+
+        # Left: Browser/Media pool (like Resolve media tab)
+        left = ctk.CTkFrame(main, width=self.s(300), fg_color="#121314")
+        left.pack(side="left", fill="y", padx=(0, self.s(8)), pady=self.s(8))
+
+        ctk.CTkLabel(left, text="MEDIA POOL", font=("Helvetica", self.sf(12), "bold"), text_color="#e6eef6").pack(pady=(self.s(10), 0))
+        # Source card
+        src_card = ctk.CTkFrame(left, fg_color="#161718", corner_radius=self.s(6))
+        src_card.pack(fill="x", padx=self.s(10), pady=self.s(10))
+        ctk.CTkLabel(src_card, text="Source", font=("Helvetica", self.sf(11), "bold")).pack(anchor="w", padx=self.s(8), pady=(self.s(8), 0))
+        self.src_display = ctk.CTkTextbox(src_card, height=self.s(48), fg_color="#0b0c0d", font=("Courier", self.sf(10)))
+        self.src_display.pack(fill="x", padx=self.s(8), pady=self.s(6))
         self.src_display.insert("1.0", "No source selected")
         self.src_display.configure(state="disabled")
-        
-        ctk.CTkButton(left_panel, text="Browse Source", command=lambda: self.browse("src"), height=self.s(35),
-                     fg_color="#2d5a7b", hover_color="#3a7099").pack(pady=self.s(5))
-        
-        self.src_info = ctk.CTkLabel(left_panel, text="0 files | 0 GB", text_color="#666", font=("Courier", self.sf(10)))
-        self.src_info.pack(pady=self.s(5))
-        
-        # Destination 1
-        ctk.CTkLabel(left_panel, text="DESTINATION 1 (Primary)", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(30), self.s(5)))
-        self.dst1_display = ctk.CTkTextbox(left_panel, height=self.s(60), fg_color="#1a1a1a", font=("Courier", self.sf(10)), wrap="word")
-        self.dst1_display.pack(padx=self.s(20), pady=self.s(5), fill="x")
+        ctk.CTkButton(src_card, text="Browse...", command=lambda: self.browse("src"), width=self.s(120)).pack(padx=self.s(8), pady=(0, self.s(8)))
+        self.src_info = ctk.CTkLabel(src_card, text="0 files | 0 GB", text_color="#9aa8b2", font=("Courier", self.sf(10)))
+        self.src_info.pack(anchor="w", padx=self.s(8), pady=(0, self.s(8)))
+
+        # Destinations
+        dst_card = ctk.CTkFrame(left, fg_color="#161718", corner_radius=self.s(6))
+        dst_card.pack(fill="x", padx=self.s(10), pady=self.s(10))
+        ctk.CTkLabel(dst_card, text="Destinations", font=("Helvetica", self.sf(11), "bold")).pack(anchor="w", padx=self.s(8), pady=(self.s(8), 0))
+        self.dst1_display = ctk.CTkTextbox(dst_card, height=self.s(48), fg_color="#0b0c0d", font=("Courier", self.sf(10)))
+        self.dst1_display.pack(fill="x", padx=self.s(8), pady=self.s(6))
         self.dst1_display.insert("1.0", "No destination selected")
         self.dst1_display.configure(state="disabled")
+        ctk.CTkButton(dst_card, text="Browse Primary", command=lambda: self.browse("dst1"), width=self.s(120)).pack(side="left", padx=self.s(8), pady=(0, self.s(8)))
         
-        ctk.CTkButton(left_panel, text="Browse Destination 1", command=lambda: self.browse("dst1"), height=self.s(35),
-                     fg_color="#2d5a7b", hover_color="#3a7099").pack(pady=self.s(5))
-        
-        # Destination 2
-        ctk.CTkLabel(left_panel, text="DESTINATION 2 (Backup)", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(30), self.s(5)))
-        self.dst2_display = ctk.CTkTextbox(left_panel, height=self.s(60), fg_color="#1a1a1a", font=("Courier", self.sf(10)), wrap="word")
-        self.dst2_display.pack(padx=self.s(20), pady=self.s(5), fill="x")
+        self.dst2_display = ctk.CTkTextbox(dst_card, height=self.s(48), fg_color="#0b0c0d", font=("Courier", self.sf(10)))
+        self.dst2_display.pack(fill="x", padx=self.s(8), pady=self.s(6))
         self.dst2_display.insert("1.0", "No destination selected")
         self.dst2_display.configure(state="disabled")
-        
-        ctk.CTkButton(left_panel, text="Browse Destination 2", command=lambda: self.browse("dst2"), height=self.s(35),
-                     fg_color="#2d5a7b", hover_color="#3a7099").pack(pady=self.s(5))
-        
-        # Transfer options
-        ctk.CTkLabel(left_panel, text="TRANSFER OPTIONS", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(30), self.s(5)))
-        
-        transfers_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
-        transfers_frame.pack(padx=self.s(20), pady=self.s(5), fill="x")
+        ctk.CTkButton(dst_card, text="Browse Backup", command=lambda: self.browse("dst2"), width=self.s(120)).pack(side="left", padx=self.s(8), pady=(0, self.s(8)))
+
+        # Transfer options in left inspector
+        options_card = ctk.CTkFrame(left, fg_color="#161718", corner_radius=self.s(6))
+        options_card.pack(fill="x", padx=self.s(10), pady=self.s(10))
+        ctk.CTkLabel(options_card, text="Transfer Options", font=("Helvetica", self.sf(11), "bold")).pack(anchor="w", padx=self.s(8), pady=(self.s(8), 0))
+        transfers_frame = ctk.CTkFrame(options_card, fg_color="transparent")
+        transfers_frame.pack(fill="x", padx=self.s(8), pady=self.s(8))
         ctk.CTkLabel(transfers_frame, text="Parallel Transfers:").pack(side="left")
         self.transfers_var = tk.StringVar(value="4")
-        transfers_spinbox = ctk.CTkOptionMenu(transfers_frame, values=["1", "2", "4", "8", "16"], 
-                                            variable=self.transfers_var, width=self.s(60))
+        transfers_spinbox = ctk.CTkOptionMenu(transfers_frame, values=["1", "2", "4", "8", "16"], variable=self.transfers_var, width=self.s(80))
         transfers_spinbox.pack(side="right")
-        
-        # Control buttons
-        button_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
-        button_frame.pack(pady=self.s(30))
-        
-        self.start_btn = ctk.CTkButton(button_frame, text="START TRANSFER", command=self.start_transfer,
-                                      height=self.s(45), fg_color="#28a745", hover_color="#218838", 
-                                      font=("Helvetica", self.sf(14), "bold"))
-        self.start_btn.pack(pady=self.s(5), fill="x")
-        
-        # Pause/Resume button
-        self.pause_btn = ctk.CTkButton(button_frame, text="PAUSE", command=self.toggle_pause,
-                                      height=self.s(35), fg_color="#ffc107", hover_color="#e0a800",
-                                      state="disabled")
-        self.pause_btn.pack(pady=self.s(5), fill="x")
-        
-        # Abort button
-        self.abort_btn = ctk.CTkButton(button_frame, text="ABORT", command=self.abort_transfer,
-                                      height=self.s(35), fg_color="#dc3545", hover_color="#c82333",
-                                      state="disabled")
-        self.abort_btn.pack(pady=self.s(5), fill="x")
-        
-        # Right panel
-        right_panel = ctk.CTkFrame(main, fg_color="#242424")
-        right_panel.pack(side="right", fill="both", expand=True)
-        
-        # Progress section
-        ctk.CTkLabel(right_panel, text="TRANSFER PROGRESS", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(20), self.s(5)))
-        
-        self.progress_bar = ctk.CTkProgressBar(right_panel, height=self.s(20))
-        self.progress_bar.pack(padx=self.s(20), pady=self.s(10), fill="x")
+
+        # Control buttons stacked like Resolve render controls
+        controls_card = ctk.CTkFrame(left, fg_color="#161718", corner_radius=self.s(6))
+        controls_card.pack(fill="x", padx=self.s(10), pady=self.s(10))
+        self.start_btn = ctk.CTkButton(controls_card, text="Start", command=self.start_transfer, fg_color="#1db954", hover_color="#14a34c", height=self.s(40), font=("Helvetica", self.sf(12), "bold"))
+        self.start_btn.pack(fill="x", padx=self.s(8), pady=(self.s(8), self.s(6)))
+        self.pause_btn = ctk.CTkButton(controls_card, text="Pause", command=self.toggle_pause, fg_color="#ffcc00", hover_color="#e0a800", height=self.s(36), state="disabled")
+        self.pause_btn.pack(fill="x", padx=self.s(8), pady=self.s(6))
+        self.abort_btn = ctk.CTkButton(controls_card, text="Abort", command=self.abort_transfer, fg_color="#e04b4b", hover_color="#c82333", height=self.s(36), state="disabled")
+        self.abort_btn.pack(fill="x", padx=self.s(8), pady=(self.s(6), self.s(8)))
+
+        # Center: Job Queue / Big progress
+        center = ctk.CTkFrame(main, fg_color="#0f1112")
+        center.pack(side="left", fill="both", expand=True, padx=(0, self.s(8)), pady=self.s(8))
+
+        ctk.CTkLabel(center, text="RENDER QUEUE", font=("Helvetica", self.sf(12), "bold"), text_color="#e6eef6").pack(anchor="w", padx=self.s(6), pady=(self.s(8), 0))
+
+        queue_card = ctk.CTkFrame(center, fg_color="#161718", corner_radius=self.s(6))
+        queue_card.pack(fill="both", expand=True, padx=self.s(10), pady=self.s(10))
+
+        # Big progress area
+        progress_area = ctk.CTkFrame(queue_card, fg_color="#121314", height=self.s(220))
+        progress_area.pack(fill="x", padx=self.s(12), pady=self.s(12))
+        self.progress_label = ctk.CTkLabel(progress_area, text="0%", font=("Helvetica", self.sf(28), "bold"), text_color="#00d4ff")
+        self.progress_label.pack(pady=(self.s(18), 0))
+        self.progress_bar = ctk.CTkProgressBar(progress_area, height=self.s(24))
+        self.progress_bar.pack(fill="x", padx=self.s(24), pady=self.s(12))
         self.progress_bar.set(0)
-        
-        self.progress_label = ctk.CTkLabel(right_panel, text="0%", font=("Helvetica", self.sf(16), "bold"))
-        self.progress_label.pack()
-        
-        # Current file
-        ctk.CTkLabel(right_panel, text="CURRENT FILE", font=("Helvetica", self.sf(12), "bold")).pack(pady=(self.s(20), self.s(5)))
-        self.current_file_label = ctk.CTkLabel(right_panel, text="Waiting...", text_color="#888", 
-                                              font=("Courier", self.sf(10)), wraplength=self.s(400))
-        self.current_file_label.pack(pady=self.s(5))
-        
-        # Stats frame
-        stats_frame = ctk.CTkFrame(right_panel, fg_color="transparent")
-        stats_frame.pack(pady=self.s(20), fill="x", padx=self.s(20))
-        
-        ctk.CTkLabel(stats_frame, text="SPEED:").pack(side="left", padx=self.s(5))
-        self.speed_label = ctk.CTkLabel(stats_frame, text="0 MB/s", text_color="#00d4ff", font=("Courier", self.sf(12)))
-        self.speed_label.pack(side="left", padx=(0, self.s(20)))
-        
-        ctk.CTkLabel(stats_frame, text="ETA:").pack(side="left", padx=self.s(5))
-        self.eta_label = ctk.CTkLabel(stats_frame, text="--:--:--", text_color="#00d4ff", font=("Courier", self.sf(12)))
-        self.eta_label.pack(side="left")
-        
-        # Log display
-        ctk.CTkLabel(right_panel, text="TRANSFER LOG", font=("Helvetica", self.sf(14), "bold")).pack(pady=(self.s(20), self.s(5)))
-        self.log_display = ctk.CTkTextbox(right_panel, height=self.s(300), fg_color="#1a1a1a", 
-                                         font=("Courier", self.sf(10)), wrap="word")
-        self.log_display.pack(padx=self.s(20), pady=self.s(10), fill="both", expand=True)
+
+        # Current file and small stats under progress
+        stats_frame = ctk.CTkFrame(queue_card, fg_color="transparent")
+        stats_frame.pack(fill="x", padx=self.s(12), pady=self.s(6))
+        ctk.CTkLabel(stats_frame, text="Current File:").pack(side="left")
+        self.current_file_label = ctk.CTkLabel(stats_frame, text="Waiting...", text_color="#9aa8b2", font=("Courier", self.sf(10)))
+        self.current_file_label.pack(side="left", padx=(self.s(8), self.s(20)))
+
+        ctk.CTkLabel(stats_frame, text="Speed:").pack(side="left")
+        self.speed_label = ctk.CTkLabel(stats_frame, text="0 MB/s", text_color="#00d4ff")
+        self.speed_label.pack(side="left", padx=(self.s(8), self.s(20)))
+        ctk.CTkLabel(stats_frame, text="ETA:").pack(side="left")
+        self.eta_label = ctk.CTkLabel(stats_frame, text="--:--:--", text_color="#00d4ff")
+        self.eta_label.pack(side="left", padx=self.s(8))
+
+        # A queue listbox to emulate Resolve's render queue
+        queue_list_frame = ctk.CTkFrame(queue_card, fg_color="#0b0c0d")
+        queue_list_frame.pack(fill="both", expand=True, padx=self.s(12), pady=self.s(10))
+        self.queue_list = tk.Listbox(queue_list_frame, bg="#0b0c0d", fg="#e6eef6", bd=0, highlightthickness=0, selectbackground="#1f6f8b")
+        self.queue_list.pack(fill="both", expand=True, padx=self.s(6), pady=self.s(6))
+        self.queue_list.insert("end", "Ready to start transfer")
+
+        # Right: Log / Inspector
+        right = ctk.CTkFrame(main, width=self.s(360), fg_color="#121314")
+        right.pack(side="right", fill="y", padx=(self.s(8), 0), pady=self.s(8))
+
+        ctk.CTkLabel(right, text="INSPECTOR", font=("Helvetica", self.sf(12), "bold"), text_color="#e6eef6").pack(pady=(self.s(8), 0))
+        log_card = ctk.CTkFrame(right, fg_color="#161718", corner_radius=self.s(6))
+        log_card.pack(fill="both", expand=True, padx=self.s(10), pady=self.s(10))
+
+        ctk.CTkLabel(log_card, text="Transfer Log", font=("Helvetica", self.sf(11), "bold")).pack(anchor="w", padx=self.s(8), pady=(self.s(8), 0))
+        self.log_display = ctk.CTkTextbox(log_card, height=self.s(220), fg_color="#0b0c0d", font=("Courier", self.sf(10)))
+        self.log_display.pack(fill="both", expand=False, padx=self.s(8), pady=self.s(8))
         self.log_display.insert("1.0", "Log initialized. Ready for transfer.\n")
         self.log_display.configure(state="disabled")
-        
-        # Status bar
-        status_bar = ctk.CTkFrame(self, height=self.s(40), fg_color="#1a1a1a")
-        status_bar.pack(fill="x", side="bottom", pady=(self.s(10), 0))
-        
-        self.status_label = ctk.CTkLabel(status_bar, text="Ready", text_color="#00d4ff")
-        self.status_label.pack(side="left", padx=self.s(20))
-        
-        self.log_path_label = ctk.CTkLabel(status_bar, text="", text_color="#666", font=("Courier", self.sf(9)))
-        self.log_path_label.pack(side="right", padx=self.s(20))
+
+        # Footer with log path
+        status_bar = ctk.CTkFrame(self, height=self.s(36), fg_color="#0b0c0d")
+        status_bar.pack(fill="x", side="bottom")
+        self.log_path_label = ctk.CTkLabel(status_bar, text="", text_color="#9aa8b2", font=("Courier", self.sf(9)))
+        self.log_path_label.pack(side="right", padx=self.s(12))
     
     def browse(self, target):
         """Browse for directory"""
@@ -774,10 +734,9 @@ class ProfessionalDITApp(ctk.CTk):
             self.src_info.configure(text="Error calculating size")
     
     def ui_callback(self, action, *args):
-        """Thread-safe UI updates from transfer engine"""
+        """Thread-safe UI updates from transfer engine"""  
         def update():
             if action == "log":
-                # expecting (msg, level)
                 msg, level = args
                 color = {
                     "INFO": "#ffffff",
@@ -785,42 +744,39 @@ class ProfessionalDITApp(ctk.CTk):
                     "WARNING": "#ffc107",
                     "ERROR": "#dc3545"
                 }.get(level, "#ffffff")
-                
-                # configure tag before inserting to ensure style is applied
                 try:
                     self.log_display.tag_config(level, foreground=color)
                 except Exception:
                     pass
-                
                 self.log_display.configure(state="normal")
                 self.log_display.insert("end", f"{msg}\n", level)
                 self.log_display.see("end")
                 self.log_display.configure(state="disabled")
-                
+                # Also push into queue list for visibility
+                try:
+                    self.queue_list.insert("end", msg)
+                    self.queue_list.see("end")
+                except Exception:
+                    pass
             elif action == "progress":
                 percentage, speed, eta = args
-                # Update speed and ETA immediately
                 try:
                     self.speed_label.configure(text=speed)
                     self.eta_label.configure(text=eta)
                 except Exception:
                     pass
-                # Animate progress bar in single-percentage steps from current to target
                 try:
                     target = max(0, min(100, int(percentage)))
                 except Exception:
                     target = 0
                 self.animate_progress_to(target)
-                
             elif action == "current_file":
                 filename = args[0]
                 self.current_file_label.configure(text=filename)
-                
             elif action == "status":
                 status = args[0]
                 self.status_label.configure(text=status)
             elif action == "dialog":
-                # args: (kind, title, message)
                 kind, title, message = args
                 try:
                     if kind == "info":
@@ -835,47 +791,28 @@ class ProfessionalDITApp(ctk.CTk):
         self.after(0, update)
 
     def animate_progress_to(self, target_percentage, step_delay=8):
-        """
-        Animate the progress bar from the current percentage to the target_percentage
-        in single-percentage steps to provide 100 discrete steps (0-100).
-        step_delay is in milliseconds per percentage increment (default 8ms).
-        """
-        # Cancel any existing animation by setting the target; the running animator
-        # will pick up the new target on the next tick.
         self._target_percentage = target_percentage
-
-        # If already animating, don't start another loop; the current loop will move toward new target
         if self._progress_animating:
             return
-
         self._progress_animating = True
-
         def step():
-            # move current one step toward target
             if self._current_percentage < self._target_percentage:
                 self._current_percentage += 1
             elif self._current_percentage > self._target_percentage:
                 self._current_percentage -= 1
-
-            # update UI
             try:
                 self.progress_bar.set(self._current_percentage / 100.0)
                 self.progress_label.configure(text=f"{self._current_percentage}%")
             except Exception:
                 pass
-
             if self._current_percentage == self._target_percentage:
-                # reached target; stop animation
                 self._progress_animating = False
             else:
-                # schedule next increment/decrement
                 self.after(step_delay, step)
-
-        # kick off animation
         self.after(0, step)
     
     def start_transfer(self):
-        """Start the transfer process in a separate thread"""
+        """Start the transfer process in a separate thread"""  
         with self._state_lock:
             if self.is_transferring:
                 messagebox.showwarning("Warning", "Transfer already in progress or paused. Resume or abort first.")
@@ -894,34 +831,21 @@ class ProfessionalDITApp(ctk.CTk):
         
         try:
             transfers = int(self.transfers_var.get())
-            
-            # Create transfer engine
             self.engine = TransferEngine(self.logger, self.ui_callback)
-            
-            # store current transfer args for resume
             with self._state_lock:
                 self.current_transfer_args = (src, dst1, transfers)
                 self.is_transferring = True
                 self.is_paused = False
-            
-            # Update UI
             self.start_btn.configure(state="disabled")
             self.pause_btn.configure(state="normal", text="PAUSE")
             self.abort_btn.configure(state="normal")
-            # reset progress animation variables
             self._current_percentage = 0
             self._target_percentage = 0
             self.progress_bar.set(0)
             self.progress_label.configure(text="0%")
-            
-            # Start transfer in thread
-            self.transfer_thread = threading.Thread(
-                target=self.run_transfer,
-                args=(src, dst1, transfers, False),  # resume=False
-                daemon=True
-            )
+            self.queue_list.insert("end", f"Queued: {os.path.basename(src)} -> {os.path.basename(dst1)}")
+            self.transfer_thread = threading.Thread(target=self.run_transfer, args=(src, dst1, transfers, False), daemon=True)
             self.transfer_thread.start()
-            
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start transfer: {str(e)}")
             self.logger.error(f"Start transfer error: {e}")
@@ -932,51 +856,36 @@ class ProfessionalDITApp(ctk.CTk):
     def run_transfer(self, src, dst, transfers, resume=False):
         """Run the transfer process (called from thread)"""
         try:
-            # Preflight check (skip on resume)
             if not resume:
                 self.ui_callback("status", "Preflight check...")
                 self.engine.preflight_check(src, dst)
-            
-            # Run rclone copy
             self.ui_callback("status", "Transferring...")
             return_code = self.engine.run_rclone_copy(src, dst, transfers)
-            
             if return_code == 0:
                 self.ui_callback("status", "Verifying...")
-                # Verify transfer
                 self.engine.verify_transfer(src, dst)
-                
-                # Create MHL
                 self.ui_callback("status", "Creating MHL...")
                 self.engine.create_mhl(dst)
-                
                 self.ui_callback("log", "Transfer completed successfully!", "SUCCESS")
                 self.ui_callback("status", "Complete")
-                
-                # messagebox must run on main thread
                 self.after(0, lambda: messagebox.showinfo("Success", "Transfer completed successfully!"))
             else:
                 raise ValueError(f"Rclone exited with code {return_code}")
-                
         except PauseRequested as p:
-            # Pause was requested: keep transfer state so user may resume
             with self._state_lock:
                 self.is_paused = True
-                self.is_transferring = True  # transfer logically still in-progress but paused
+                self.is_transferring = True
             self.ui_callback("log", str(p), "INFO")
             self.ui_callback("status", "Paused")
-            # Update pause button to show Resume on main thread
             try:
                 self.after(0, lambda: self.pause_btn.configure(text="RESUME"))
             except Exception:
                 pass
             self.logger.info(f"Transfer paused: {p}")
         except AbortRequested as a:
-            # Abort requested: stop and reset UI
             self.ui_callback("log", str(a), "WARNING")
             self.ui_callback("status", "Aborted")
             self.logger.warning(f"Transfer aborted: {a}")
-            # show dialog on main thread
             self.after(0, lambda: messagebox.showwarning("Aborted", "Transfer was aborted by user"))
             with self._state_lock:
                 self.is_transferring = False
@@ -986,18 +895,15 @@ class ProfessionalDITApp(ctk.CTk):
             error_msg = f"Transfer failed: {str(e)}"
             self.ui_callback("log", error_msg, "ERROR")
             self.ui_callback("status", "Failed")
-            # show dialog on main thread
             self.after(0, lambda: messagebox.showerror("Error", error_msg))
             self.logger.error(f"Transfer error: {e}")
         finally:
-            # If transfer was paused, do not fully reset UI (allow resume)
             with self._state_lock:
                 paused = self.is_paused
             if not paused:
                 self.after(0, self.reset_ui)
     
     def toggle_pause(self):
-        """Toggle pause/resume"""
         with self._state_lock:
             engine = self.engine
             is_transferring = self.is_transferring
@@ -1007,40 +913,30 @@ class ProfessionalDITApp(ctk.CTk):
             return
         
         if not is_paused:
-            # Request pause
             if messagebox.askyesno("Confirm", "Pause the current transfer?"):
                 try:
                     engine.pause()
-                    # The engine.pause() will cause the running transfer thread to raise PauseRequested
-                    # UI updates will be handled in run_transfer's exception handler
                 except Exception as e:
                     self.ui_callback("log", f"Failed to pause: {e}", "ERROR")
                     self.logger.error(f"Pause error: {e}")
         else:
-            # Resume
             try:
                 engine.resume()
                 with self._state_lock:
                     self.is_paused = False
                 self.ui_callback("status", "Resuming...")
                 self.pause_btn.configure(text="PAUSE")
-                # start a new thread to resume transfer; use stored args
                 with self._state_lock:
                     args = self.current_transfer_args
                 if args:
                     src, dst, transfers = args
-                    self.transfer_thread = threading.Thread(
-                        target=self.run_transfer,
-                        args=(src, dst, transfers, True),  # resume=True
-                        daemon=True
-                    )
+                    self.transfer_thread = threading.Thread(target=self.run_transfer, args=(src, dst, transfers, True), daemon=True)
                     self.transfer_thread.start()
             except Exception as e:
                 self.ui_callback("log", f"Failed to resume: {e}", "ERROR")
                 self.logger.error(f"Resume error: {e}")
     
     def abort_transfer(self):
-        """Abort the current transfer entirely"""
         with self._state_lock:
             engine = self.engine
             is_transferring = self.is_transferring
@@ -1049,8 +945,6 @@ class ProfessionalDITApp(ctk.CTk):
             if messagebox.askyesno("Confirm", "Abort the current transfer? This will stop now."):
                 try:
                     engine.abort()
-                    # engine.abort() will cause the running transfer thread to raise AbortRequested
-                    # Ensure UI resets after abort
                     self.ui_callback("log", "Transfer aborted by user", "WARNING")
                     self.ui_callback("status", "Aborted")
                 except Exception as e:
@@ -1061,11 +955,9 @@ class ProfessionalDITApp(ctk.CTk):
                         self.is_paused = False
                         self.current_transfer_args = None
                         self.is_transferring = False
-                    # reset UI state on main thread
                     self.after(0, self.reset_ui)
     
     def reset_ui(self):
-        """Reset UI after transfer completion"""
         with self._state_lock:
             self.is_transferring = False
             self.is_paused = False
@@ -1073,20 +965,17 @@ class ProfessionalDITApp(ctk.CTk):
         self.start_btn.configure(state="normal")
         self.pause_btn.configure(state="disabled", text="PAUSE")
         self.abort_btn.configure(state="disabled")
-        # animate back to 0 for clarity
         self.animate_progress_to(0)
         self.current_file_label.configure(text="Waiting...")
         self.speed_label.configure(text="0 MB/s")
         self.eta_label.configure(text="--:--:--")
     
     def load_saved_config(self):
-        """Load saved configuration"""
         if self.config:
             src = self.config.get("src", "")
             dst1 = self.config.get("dst1", "")
             dst2 = self.config.get("dst2", "")
             transfers = self.config.get("transfers", "4")
-            # update scale from config in case it changed
             try:
                 self.scale = float(self.config.get("scaling", self.scale))
             except Exception:
@@ -1115,7 +1004,6 @@ class ProfessionalDITApp(ctk.CTk):
             self.transfers_var.set(transfers)
     
     def save_config(self):
-        """Save current configuration"""
         config = {
             "src": self.src_display.get("1.0", "end-1c").strip() if self.src_display.get("1.0", "end-1c") != "No source selected" else "",
             "dst1": self.dst1_display.get("1.0", "end-1c").strip() if self.dst1_display.get("1.0", "end-1c") != "No destination selected" else "",
@@ -1126,14 +1014,12 @@ class ProfessionalDITApp(ctk.CTk):
         ConfigManager.save(config)
     
     def on_closing(self):
-        """Handle window closing"""
         with self._state_lock:
             is_transferring = self.is_transferring
             engine = self.engine
         if is_transferring:
             if messagebox.askyesno("Confirm", "Transfer in progress. Close anyway?"):
                 if engine:
-                    # If paused, it's safe to close. If running, attempt to abort
                     try:
                         engine.abort()
                     except Exception:
