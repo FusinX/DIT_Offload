@@ -299,6 +299,11 @@ class ProfessionalDITApp(ctk.CTk):
         self.engine = None
         self.transfer_thread = None
         self.is_transferring = False
+
+        # progress animation state (for 0-100 steps)
+        self._current_percentage = 0
+        self._target_percentage = 0
+        self._progress_animating = False
         
         self.apply_scaling()
         self.check_dependencies()
@@ -574,10 +579,18 @@ class ProfessionalDITApp(ctk.CTk):
                 
             elif action == "progress":
                 percentage, speed, eta = args
-                self.progress_bar.set(percentage / 100)
-                self.progress_label.configure(text=f"{percentage}%")
-                self.speed_label.configure(text=speed)
-                self.eta_label.configure(text=eta)
+                # Update speed and ETA immediately
+                try:
+                    self.speed_label.configure(text=speed)
+                    self.eta_label.configure(text=eta)
+                except Exception:
+                    pass
+                # Animate progress bar in single-percentage steps from current to target
+                try:
+                    target = max(0, min(100, int(percentage)))
+                except Exception:
+                    target = 0
+                self.animate_progress_to(target)
                 
             elif action == "current_file":
                 filename = args[0]
@@ -588,6 +601,46 @@ class ProfessionalDITApp(ctk.CTk):
                 self.status_label.configure(text=status)
         
         self.after(0, update)
+
+    def animate_progress_to(self, target_percentage, step_delay=8):
+        """
+        Animate the progress bar from the current percentage to the target_percentage
+        in single-percentage steps to provide 100 discrete steps (0-100).
+        step_delay is in milliseconds per percentage increment (default 8ms).
+        """
+        # Cancel any existing animation by setting the target; the running animator
+        # will pick up the new target on the next tick.
+        self._target_percentage = target_percentage
+
+        # If already animating, don't start another loop; the current loop will move toward new target
+        if self._progress_animating:
+            return
+
+        self._progress_animating = True
+
+        def step():
+            # move current one step toward target
+            if self._current_percentage < self._target_percentage:
+                self._current_percentage += 1
+            elif self._current_percentage > self._target_percentage:
+                self._current_percentage -= 1
+
+            # update UI
+            try:
+                self.progress_bar.set(self._current_percentage / 100.0)
+                self.progress_label.configure(text=f"{self._current_percentage}%")
+            except Exception:
+                pass
+
+            if self._current_percentage == self._target_percentage:
+                # reached target; stop animation
+                self._progress_animating = False
+            else:
+                # schedule next increment/decrement
+                self.after(step_delay, step)
+
+        # kick off animation
+        self.after(0, step)
     
     def start_transfer(self):
         """Start the transfer process in a separate thread"""
@@ -616,6 +669,11 @@ class ProfessionalDITApp(ctk.CTk):
             self.start_btn.configure(state="disabled")
             self.stop_btn.configure(state="normal")
             self.is_transferring = True
+            # reset progress animation variables
+            self._current_percentage = 0
+            self._target_percentage = 0
+            self.progress_bar.set(0)
+            self.progress_label.configure(text="0%")
             
             # Start transfer in thread
             self.transfer_thread = threading.Thread(
@@ -678,8 +736,8 @@ class ProfessionalDITApp(ctk.CTk):
         self.is_transferring = False
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
-        self.progress_bar.set(0)
-        self.progress_label.configure(text="0%")
+        # animate back to 0 for clarity
+        self.animate_progress_to(0)
         self.current_file_label.configure(text="Waiting...")
         self.speed_label.configure(text="0 MB/s")
         self.eta_label.configure(text="--:--:--")
