@@ -14,6 +14,8 @@ import re
 import sys
 import platform
 import ctypes
+import signal
+import time
 
 # ==================== LOGGER ====================
 class DITLogger:
@@ -67,12 +69,20 @@ class ConfigManager:
             print(f"Error saving config: {e}")
 
 # ==================== TRANSFER ENGINE ====================
+class PauseRequested(Exception):
+    pass
+
+class AbortRequested(Exception):
+    pass
+
 class TransferEngine:
     def __init__(self, logger, ui_callback):
         self.logger = logger
         self.ui_callback = ui_callback
         self.process = None
         self.stopped = False
+        self.paused = False
+        self.aborted = False
         
     def preflight_check(self, src, dst):
         """Verify paths and disk space before transfer"""
@@ -219,6 +229,8 @@ class TransferEngine:
     def run_rclone_copy(self, src, dst, transfers=4):
         """Execute rclone copy with real-time progress"""
         self.stopped = False
+        self.paused = False  # each run starts as not paused (pausing is external)
+        self.aborted = False
         cmd = [
             "rclone", "copy", src, dst,
             "--checksum",
@@ -242,7 +254,8 @@ class TransferEngine:
             )
             
             for line in self.process.stdout:
-                if self.stopped:
+                # If an abort or pause was requested externally, break and let the caller handle
+                if self.aborted or self.paused or self.stopped:
                     break
                 
                 line = line.strip()
@@ -255,9 +268,35 @@ class TransferEngine:
                             _, percentage, speed, eta = progress_data
                             self.ui_callback("progress", percentage, speed, eta)
             
-            self.process.wait()
+            # Make sure process has ended
+            try:
+                self.process.wait(timeout=5)
+            except Exception:
+                # if it didn't exit gracefully, try to terminate
+                try:
+                    self.process.terminate()
+                    self.process.wait(timeout=5)
+                except Exception:
+                    try:
+                        self.process.kill()
+                    except Exception:
+                        pass
+            
+            # After process ends, handle pause/abort states
+            if self.aborted:
+                self.logger.warning("Rclone aborted by user")
+                raise AbortRequested("Transfer aborted by user")
+            if self.paused:
+                self.logger.info("Rclone paused by user")
+                raise PauseRequested("Transfer paused by user")
+            
+            # normal completion
             return self.process.returncode
             
+        except PauseRequested:
+            raise
+        except AbortRequested:
+            raise
         except Exception as e:
             self.logger.error(f"Rclone execution error: {e}")
             raise
@@ -345,16 +384,56 @@ class TransferEngine:
             raise
     
     def stop(self):
-        """Stop current transfer"""
+        """Stop current transfer (graceful stop). Kept for backward compatibility."""
         self.stopped = True
         if self.process and self.process.poll() is None:
             try:
                 self.process.terminate()
                 self.process.wait(timeout=5)
             except:
-                self.process.kill()
+                try:
+                    self.process.kill()
+                except Exception:
+                    pass
             self.ui_callback("log", "Transfer stopped by user", "WARNING")
             self.logger.warning("Transfer stopped by user")
+
+    def pause(self):
+        """Request a pause: terminate running rclone; the run method will raise PauseRequested."""
+        self.paused = True
+        if self.process and self.process.poll() is None:
+            try:
+                # try to terminate gracefully
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except Exception:
+                try:
+                    self.process.kill()
+                except Exception:
+                    pass
+        self.ui_callback("log", "Pause requested - transfer will pause shortly", "INFO")
+        self.logger.info("Pause requested by user")
+
+    def resume(self):
+        """Clear paused flag. The caller should restart the copy operation in a new thread."""
+        self.paused = False
+        self.ui_callback("log", "Resuming transfer...", "INFO")
+        self.logger.info("Resume requested by user")
+
+    def abort(self):
+        """Request an abort: attempt to terminate process and signal abortion."""
+        self.aborted = True
+        if self.process and self.process.poll() is None:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except Exception:
+                try:
+                    self.process.kill()
+                except Exception:
+                    pass
+        self.ui_callback("log", "Abort requested - transfer will stop", "WARNING")
+        self.logger.warning("Abort requested by user")
 
 # ==================== MAIN APPLICATION ====================
 class ProfessionalDITApp(ctk.CTk):
@@ -374,6 +453,12 @@ class ProfessionalDITApp(ctk.CTk):
         self.engine = None
         self.transfer_thread = None
         self.is_transferring = False
+
+        # track paused state at UI level
+        self.is_paused = False
+
+        # store current transfer args for resume
+        self.current_transfer_args = None
 
         # progress animation state (for 0-100 steps)
         self._current_percentage = 0
@@ -534,10 +619,17 @@ class ProfessionalDITApp(ctk.CTk):
                                       font=("Helvetica", self.sf(14), "bold"))
         self.start_btn.pack(pady=self.s(5), fill="x")
         
-        self.stop_btn = ctk.CTkButton(button_frame, text="STOP TRANSFER", command=self.stop_transfer,
-                                     height=self.s(35), fg_color="#dc3545", hover_color="#c82333",
-                                     state="disabled")
-        self.stop_btn.pack(pady=self.s(5), fill="x")
+        # Pause/Resume button
+        self.pause_btn = ctk.CTkButton(button_frame, text="PAUSE", command=self.toggle_pause,
+                                      height=self.s(35), fg_color="#ffc107", hover_color="#e0a800",
+                                      state="disabled")
+        self.pause_btn.pack(pady=self.s(5), fill="x")
+        
+        # Abort button
+        self.abort_btn = ctk.CTkButton(button_frame, text="ABORT", command=self.abort_transfer,
+                                      height=self.s(35), fg_color="#dc3545", hover_color="#c82333",
+                                      state="disabled")
+        self.abort_btn.pack(pady=self.s(5), fill="x")
         
         # Right panel
         right_panel = ctk.CTkFrame(main, fg_color="#242424")
@@ -719,7 +811,7 @@ class ProfessionalDITApp(ctk.CTk):
     
     def start_transfer(self):
         """Start the transfer process in a separate thread"""
-        if self.is_transferring:
+        if self.is_transferring and not self.is_paused:
             messagebox.showwarning("Warning", "Transfer already in progress")
             return
         
@@ -740,10 +832,15 @@ class ProfessionalDITApp(ctk.CTk):
             # Create transfer engine
             self.engine = TransferEngine(self.logger, self.ui_callback)
             
+            # store current transfer args for resume
+            self.current_transfer_args = (src, dst1, transfers)
+            
             # Update UI
             self.start_btn.configure(state="disabled")
-            self.stop_btn.configure(state="normal")
+            self.pause_btn.configure(state="normal", text="PAUSE")
+            self.abort_btn.configure(state="normal")
             self.is_transferring = True
+            self.is_paused = False
             # reset progress animation variables
             self._current_percentage = 0
             self._target_percentage = 0
@@ -753,7 +850,7 @@ class ProfessionalDITApp(ctk.CTk):
             # Start transfer in thread
             self.transfer_thread = threading.Thread(
                 target=self.run_transfer,
-                args=(src, dst1, transfers),
+                args=(src, dst1, transfers, False),  # resume=False
                 daemon=True
             )
             self.transfer_thread.start()
@@ -762,12 +859,13 @@ class ProfessionalDITApp(ctk.CTk):
             messagebox.showerror("Error", f"Failed to start transfer: {str(e)}")
             self.logger.error(f"Start transfer error: {e}")
     
-    def run_transfer(self, src, dst, transfers):
+    def run_transfer(self, src, dst, transfers, resume=False):
         """Run the transfer process (called from thread)"""
         try:
-            # Preflight check
-            self.ui_callback("status", "Preflight check...")
-            self.engine.preflight_check(src, dst)
+            # Preflight check (skip on resume)
+            if not resume:
+                self.ui_callback("status", "Preflight check...")
+                self.engine.preflight_check(src, dst)
             
             # Run rclone copy
             self.ui_callback("status", "Transferring...")
@@ -789,6 +887,24 @@ class ProfessionalDITApp(ctk.CTk):
             else:
                 raise ValueError(f"Rclone exited with code {return_code}")
                 
+        except PauseRequested as p:
+            # Pause was requested: keep transfer state so user may resume
+            self.is_paused = True
+            self.is_transferring = True  # transfer logically still in-progress but paused
+            self.ui_callback("log", str(p), "INFO")
+            self.ui_callback("status", "Paused")
+            # Update pause button to show Resume
+            try:
+                self.pause_btn.configure(text="RESUME")
+            except Exception:
+                pass
+            self.logger.info(f"Transfer paused: {p}")
+        except AbortRequested as a:
+            # Abort requested: stop and reset UI
+            self.ui_callback("log", str(a), "WARNING")
+            self.ui_callback("status", "Aborted")
+            self.logger.warning(f"Transfer aborted: {a}")
+            messagebox.showwarning("Aborted", "Transfer was aborted by user")
         except Exception as e:
             error_msg = f"Transfer failed: {str(e)}"
             self.ui_callback("log", error_msg, "ERROR")
@@ -796,21 +912,71 @@ class ProfessionalDITApp(ctk.CTk):
             messagebox.showerror("Error", error_msg)
             self.logger.error(f"Transfer error: {e}")
         finally:
-            self.after(0, self.reset_ui)
+            # If transfer was paused, do not fully reset UI (allow resume)
+            if not self.is_paused:
+                self.after(0, self.reset_ui)
     
-    def stop_transfer(self):
-        """Stop the current transfer"""
+    def toggle_pause(self):
+        """Toggle pause/resume"""
+        if not self.engine or not self.is_transferring:
+            return
+        
+        if not self.is_paused:
+            # Request pause
+            if messagebox.askyesno("Confirm", "Pause the current transfer?"):
+                try:
+                    self.engine.pause()
+                    # The engine.pause() will cause the running transfer thread to raise PauseRequested
+                    # UI updates will be handled in run_transfer's exception handler
+                except Exception as e:
+                    self.ui_callback("log", f"Failed to pause: {e}", "ERROR")
+                    self.logger.error(f"Pause error: {e}")
+        else:
+            # Resume
+            try:
+                self.engine.resume()
+                self.is_paused = False
+                self.ui_callback("status", "Resuming...")
+                self.pause_btn.configure(text="PAUSE")
+                # start a new thread to resume transfer; use stored args
+                if self.current_transfer_args:
+                    src, dst, transfers = self.current_transfer_args
+                    self.transfer_thread = threading.Thread(
+                        target=self.run_transfer,
+                        args=(src, dst, transfers, True),  # resume=True
+                        daemon=True
+                    )
+                    self.transfer_thread.start()
+            except Exception as e:
+                self.ui_callback("log", f"Failed to resume: {e}", "ERROR")
+                self.logger.error(f"Resume error: {e}")
+    
+    def abort_transfer(self):
+        """Abort the current transfer entirely"""
         if self.engine and self.is_transferring:
-            if messagebox.askyesno("Confirm", "Stop the current transfer?"):
-                self.engine.stop()
-                self.ui_callback("log", "Transfer stopped by user", "WARNING")
-                self.reset_ui()
+            if messagebox.askyesno("Confirm", "Abort the current transfer? This will stop now."):
+                try:
+                    self.engine.abort()
+                    # engine.abort() will cause the running transfer thread to raise AbortRequested
+                    # Ensure UI resets after abort
+                    self.ui_callback("log", "Transfer aborted by user", "WARNING")
+                    self.ui_callback("status", "Aborted")
+                except Exception as e:
+                    self.ui_callback("log", f"Failed to abort: {e}", "ERROR")
+                    self.logger.error(f"Abort error: {e}")
+                finally:
+                    # reset UI state
+                    self.is_paused = False
+                    self.current_transfer_args = None
+                    self.after(0, self.reset_ui)
     
     def reset_ui(self):
         """Reset UI after transfer completion"""
         self.is_transferring = False
+        self.is_paused = False
         self.start_btn.configure(state="normal")
-        self.stop_btn.configure(state="disabled")
+        self.pause_btn.configure(state="disabled", text="PAUSE")
+        self.abort_btn.configure(state="disabled")
         # animate back to 0 for clarity
         self.animate_progress_to(0)
         self.current_file_label.configure(text="Waiting...")
@@ -868,7 +1034,11 @@ class ProfessionalDITApp(ctk.CTk):
         if self.is_transferring:
             if messagebox.askyesno("Confirm", "Transfer in progress. Close anyway?"):
                 if self.engine:
-                    self.engine.stop()
+                    # If paused, it's safe to close. If running, attempt to abort
+                    try:
+                        self.engine.abort()
+                    except Exception:
+                        pass
                 self.destroy()
         else:
             self.destroy()
@@ -876,3 +1046,4 @@ class ProfessionalDITApp(ctk.CTk):
 if __name__ == "__main__":
     app = ProfessionalDITApp()
     app.mainloop()
+```
