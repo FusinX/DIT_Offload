@@ -306,23 +306,53 @@ class TransferEngine:
         self.ui_callback("log", "Running independent verification pass...", "INFO")
         self.logger.info("Starting verification with rclone check")
         
-        cmd = ["rclone", "check", src, dst, "--checksum", "-v"]
+        base_cmd = ["rclone", "check", src, dst, "-v"]
+        
+        def _run(cmd):
+            try:
+                return subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            except subprocess.TimeoutExpired:
+                return None
         
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600
-            )
+            # First try checksum-based verification (preferred)
+            cmd_checksum = base_cmd + ["--checksum"]
+            result = _run(cmd_checksum)
+            if result is None:
+                raise ValueError("Verification timed out")
             
-            if result.returncode != 0:
-                self.logger.error(f"Verification failed:\n{result.stderr}")
+            # If checksum run succeeded, great.
+            if result.returncode == 0:
+                self.ui_callback("log", "Verification passed - checksums match", "SUCCESS")
+                self.logger.success("Verification passed (checksum)")
+                return True
+            
+            # If checksum failed, inspect output to see if checksums/hashes are not available/supported.
+            combined_output = (result.stderr or "") + "\n" + (result.stdout or "")
+            self.logger.info(f"rclone check (checksum) exit {result.returncode}. Output:\n{combined_output}")
+            
+            # Heuristic: if the output mentions "hash", "checksum", "not supported", "no md5", "unable to compute" etc,
+            # fall back to a non-checksum check (size/mod-time based).
+            if re.search(r'no .*hash|no .*checksum|hash .*not supported|cannot .*checksum|unable to compute|not supported', combined_output, re.I):
+                self.logger.warning("Checksum verification not supported for these remotes/filesystems. Falling back to size/modtime check.")
+                self.ui_callback("log", "Checksum verification not available; falling back to size/modtime verification", "WARNING")
+                
+                result2 = _run(base_cmd)
+                if result2 is None:
+                    raise ValueError("Verification timed out")
+                
+                if result2.returncode == 0:
+                    self.ui_callback("log", "Verification passed (size/modtime check)", "SUCCESS")
+                    self.logger.success("Verification passed (size/modtime)")
+                    return True
+                else:
+                    combined_output2 = (result2.stderr or "") + "\n" + (result2.stdout or "")
+                    self.logger.error(f"rclone check (fallback) exit {result2.returncode}. Output:\n{combined_output2}")
+                    raise ValueError("Verification failed: Files do not match")
+            else:
+                # No obvious checksum-support issue: fail and show diagnosis
+                self.logger.error(f"rclone check reported mismatches or error:\n{combined_output}")
                 raise ValueError("Verification failed: Files do not match")
-            
-            self.ui_callback("log", "Verification passed - all checksums match", "SUCCESS")
-            self.logger.success("Verification passed")
-            return True
             
         except subprocess.TimeoutExpired:
             raise ValueError("Verification timed out")
