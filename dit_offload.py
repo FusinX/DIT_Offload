@@ -112,8 +112,11 @@ class TransferEngine:
         if file_count == 0:
             raise ValueError("No files found in source directory")
         
-        dst_stats = shutil.disk_usage(dst)
-        dst_free = dst_stats.free
+        try:
+            dst_stats = shutil.disk_usage(dst)
+            dst_free = dst_stats.free
+        except Exception as e:
+            raise ValueError(f"Unable to determine destination disk usage: {e}")
         
         if src_size > dst_free * 0.95:
             raise ValueError(
@@ -249,11 +252,19 @@ class TransferEngine:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1,
-                universal_newlines=True
+                bufsize=1
             )
             
-            for line in self.process.stdout:
+            # Use readline loop for more reliable streaming across platforms
+            while True:
+                line = self.process.stdout.readline()
+                if line == '' and self.process.poll() is not None:
+                    break
+                if not line:
+                    # no data right now, avoid busy-loop
+                    time.sleep(0.01)
+                    continue
+                
                 # If an abort or pause was requested externally, break and let the caller handle
                 if self.aborted or self.paused or self.stopped:
                     break
@@ -309,16 +320,14 @@ class TransferEngine:
         base_cmd = ["rclone", "check", src, dst, "-v"]
         
         def _run(cmd):
-            try:
-                return subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-            except subprocess.TimeoutExpired:
-                return None
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         
         try:
             # First try checksum-based verification (preferred)
             cmd_checksum = base_cmd + ["--checksum"]
-            result = _run(cmd_checksum)
-            if result is None:
+            try:
+                result = _run(cmd_checksum)
+            except subprocess.TimeoutExpired:
                 raise ValueError("Verification timed out")
             
             # If checksum run succeeded, great.
@@ -337,8 +346,9 @@ class TransferEngine:
                 self.logger.warning("Checksum verification not supported for these remotes/filesystems. Falling back to size/modtime check.")
                 self.ui_callback("log", "Checksum verification not available; falling back to size/modtime verification", "WARNING")
                 
-                result2 = _run(base_cmd)
-                if result2 is None:
+                try:
+                    result2 = _run(base_cmd)
+                except subprocess.TimeoutExpired:
                     raise ValueError("Verification timed out")
                 
                 if result2.returncode == 0:
@@ -495,6 +505,9 @@ class ProfessionalDITApp(ctk.CTk):
         self._target_percentage = 0
         self._progress_animating = False
         
+        # state lock to avoid races between UI and worker threads
+        self._state_lock = threading.Lock()
+        
         self.apply_scaling()
         self.check_dependencies()
         
@@ -512,6 +525,12 @@ class ProfessionalDITApp(ctk.CTk):
         self.setup_ui()
         self.load_saved_config()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # show log path in status bar
+        try:
+            self.log_path_label.configure(text=str(self.logger.log_file))
+        except Exception:
+            pass
         
         self.logger.info("="*60)
         self.logger.info("DIT Pro v2.0 Started")
@@ -758,6 +777,7 @@ class ProfessionalDITApp(ctk.CTk):
         """Thread-safe UI updates from transfer engine"""
         def update():
             if action == "log":
+                # expecting (msg, level)
                 msg, level = args
                 color = {
                     "INFO": "#ffffff",
@@ -766,13 +786,16 @@ class ProfessionalDITApp(ctk.CTk):
                     "ERROR": "#dc3545"
                 }.get(level, "#ffffff")
                 
+                # configure tag before inserting to ensure style is applied
+                try:
+                    self.log_display.tag_config(level, foreground=color)
+                except Exception:
+                    pass
+                
                 self.log_display.configure(state="normal")
                 self.log_display.insert("end", f"{msg}\n", level)
                 self.log_display.see("end")
                 self.log_display.configure(state="disabled")
-                
-                # Tag for coloring
-                self.log_display.tag_config(level, foreground=color)
                 
             elif action == "progress":
                 percentage, speed, eta = args
@@ -796,6 +819,18 @@ class ProfessionalDITApp(ctk.CTk):
             elif action == "status":
                 status = args[0]
                 self.status_label.configure(text=status)
+            elif action == "dialog":
+                # args: (kind, title, message)
+                kind, title, message = args
+                try:
+                    if kind == "info":
+                        messagebox.showinfo(title, message)
+                    elif kind == "warning":
+                        messagebox.showwarning(title, message)
+                    elif kind == "error":
+                        messagebox.showerror(title, message)
+                except Exception:
+                    pass
         
         self.after(0, update)
 
@@ -841,9 +876,10 @@ class ProfessionalDITApp(ctk.CTk):
     
     def start_transfer(self):
         """Start the transfer process in a separate thread"""
-        if self.is_transferring and not self.is_paused:
-            messagebox.showwarning("Warning", "Transfer already in progress")
-            return
+        with self._state_lock:
+            if self.is_transferring:
+                messagebox.showwarning("Warning", "Transfer already in progress or paused. Resume or abort first.")
+                return
         
         src = self.src_display.get("1.0", "end-1c").strip()
         dst1 = self.dst1_display.get("1.0", "end-1c").strip()
@@ -863,14 +899,15 @@ class ProfessionalDITApp(ctk.CTk):
             self.engine = TransferEngine(self.logger, self.ui_callback)
             
             # store current transfer args for resume
-            self.current_transfer_args = (src, dst1, transfers)
+            with self._state_lock:
+                self.current_transfer_args = (src, dst1, transfers)
+                self.is_transferring = True
+                self.is_paused = False
             
             # Update UI
             self.start_btn.configure(state="disabled")
             self.pause_btn.configure(state="normal", text="PAUSE")
             self.abort_btn.configure(state="normal")
-            self.is_transferring = True
-            self.is_paused = False
             # reset progress animation variables
             self._current_percentage = 0
             self._target_percentage = 0
@@ -888,6 +925,9 @@ class ProfessionalDITApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start transfer: {str(e)}")
             self.logger.error(f"Start transfer error: {e}")
+            with self._state_lock:
+                self.is_transferring = False
+                self.current_transfer_args = None
     
     def run_transfer(self, src, dst, transfers, resume=False):
         """Run the transfer process (called from thread)"""
@@ -913,19 +953,21 @@ class ProfessionalDITApp(ctk.CTk):
                 self.ui_callback("log", "Transfer completed successfully!", "SUCCESS")
                 self.ui_callback("status", "Complete")
                 
-                messagebox.showinfo("Success", "Transfer completed successfully!")
+                # messagebox must run on main thread
+                self.after(0, lambda: messagebox.showinfo("Success", "Transfer completed successfully!"))
             else:
                 raise ValueError(f"Rclone exited with code {return_code}")
                 
         except PauseRequested as p:
             # Pause was requested: keep transfer state so user may resume
-            self.is_paused = True
-            self.is_transferring = True  # transfer logically still in-progress but paused
+            with self._state_lock:
+                self.is_paused = True
+                self.is_transferring = True  # transfer logically still in-progress but paused
             self.ui_callback("log", str(p), "INFO")
             self.ui_callback("status", "Paused")
-            # Update pause button to show Resume
+            # Update pause button to show Resume on main thread
             try:
-                self.pause_btn.configure(text="RESUME")
+                self.after(0, lambda: self.pause_btn.configure(text="RESUME"))
             except Exception:
                 pass
             self.logger.info(f"Transfer paused: {p}")
@@ -934,28 +976,41 @@ class ProfessionalDITApp(ctk.CTk):
             self.ui_callback("log", str(a), "WARNING")
             self.ui_callback("status", "Aborted")
             self.logger.warning(f"Transfer aborted: {a}")
-            messagebox.showwarning("Aborted", "Transfer was aborted by user")
+            # show dialog on main thread
+            self.after(0, lambda: messagebox.showwarning("Aborted", "Transfer was aborted by user"))
+            with self._state_lock:
+                self.is_transferring = False
+                self.is_paused = False
+                self.current_transfer_args = None
         except Exception as e:
             error_msg = f"Transfer failed: {str(e)}"
             self.ui_callback("log", error_msg, "ERROR")
             self.ui_callback("status", "Failed")
-            messagebox.showerror("Error", error_msg)
+            # show dialog on main thread
+            self.after(0, lambda: messagebox.showerror("Error", error_msg))
             self.logger.error(f"Transfer error: {e}")
         finally:
             # If transfer was paused, do not fully reset UI (allow resume)
-            if not self.is_paused:
+            with self._state_lock:
+                paused = self.is_paused
+            if not paused:
                 self.after(0, self.reset_ui)
     
     def toggle_pause(self):
         """Toggle pause/resume"""
-        if not self.engine or not self.is_transferring:
+        with self._state_lock:
+            engine = self.engine
+            is_transferring = self.is_transferring
+            is_paused = self.is_paused
+        
+        if not engine or not is_transferring:
             return
         
-        if not self.is_paused:
+        if not is_paused:
             # Request pause
             if messagebox.askyesno("Confirm", "Pause the current transfer?"):
                 try:
-                    self.engine.pause()
+                    engine.pause()
                     # The engine.pause() will cause the running transfer thread to raise PauseRequested
                     # UI updates will be handled in run_transfer's exception handler
                 except Exception as e:
@@ -964,13 +1019,16 @@ class ProfessionalDITApp(ctk.CTk):
         else:
             # Resume
             try:
-                self.engine.resume()
-                self.is_paused = False
+                engine.resume()
+                with self._state_lock:
+                    self.is_paused = False
                 self.ui_callback("status", "Resuming...")
                 self.pause_btn.configure(text="PAUSE")
                 # start a new thread to resume transfer; use stored args
-                if self.current_transfer_args:
-                    src, dst, transfers = self.current_transfer_args
+                with self._state_lock:
+                    args = self.current_transfer_args
+                if args:
+                    src, dst, transfers = args
                     self.transfer_thread = threading.Thread(
                         target=self.run_transfer,
                         args=(src, dst, transfers, True),  # resume=True
@@ -983,10 +1041,14 @@ class ProfessionalDITApp(ctk.CTk):
     
     def abort_transfer(self):
         """Abort the current transfer entirely"""
-        if self.engine and self.is_transferring:
+        with self._state_lock:
+            engine = self.engine
+            is_transferring = self.is_transferring
+        
+        if engine and is_transferring:
             if messagebox.askyesno("Confirm", "Abort the current transfer? This will stop now."):
                 try:
-                    self.engine.abort()
+                    engine.abort()
                     # engine.abort() will cause the running transfer thread to raise AbortRequested
                     # Ensure UI resets after abort
                     self.ui_callback("log", "Transfer aborted by user", "WARNING")
@@ -995,15 +1057,19 @@ class ProfessionalDITApp(ctk.CTk):
                     self.ui_callback("log", f"Failed to abort: {e}", "ERROR")
                     self.logger.error(f"Abort error: {e}")
                 finally:
-                    # reset UI state
-                    self.is_paused = False
-                    self.current_transfer_args = None
+                    with self._state_lock:
+                        self.is_paused = False
+                        self.current_transfer_args = None
+                        self.is_transferring = False
+                    # reset UI state on main thread
                     self.after(0, self.reset_ui)
     
     def reset_ui(self):
         """Reset UI after transfer completion"""
-        self.is_transferring = False
-        self.is_paused = False
+        with self._state_lock:
+            self.is_transferring = False
+            self.is_paused = False
+            self.current_transfer_args = None
         self.start_btn.configure(state="normal")
         self.pause_btn.configure(state="disabled", text="PAUSE")
         self.abort_btn.configure(state="disabled")
@@ -1061,12 +1127,15 @@ class ProfessionalDITApp(ctk.CTk):
     
     def on_closing(self):
         """Handle window closing"""
-        if self.is_transferring:
+        with self._state_lock:
+            is_transferring = self.is_transferring
+            engine = self.engine
+        if is_transferring:
             if messagebox.askyesno("Confirm", "Transfer in progress. Close anyway?"):
-                if self.engine:
+                if engine:
                     # If paused, it's safe to close. If running, attempt to abort
                     try:
-                        self.engine.abort()
+                        engine.abort()
                     except Exception:
                         pass
                 self.destroy()
