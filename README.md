@@ -1,214 +1,172 @@
-# DIT Pro v2.0 - Secure Media Transfer Tool
+# Professional DIT Transfer Tool (DIT_Offload)
 
-![DIT Pro Screenshot](https://img.shields.io/badge/Version-2.0-blue) ![Python](https://img.shields.io/badge/Python-3.7%2B-green) ![License](https://img.shields.io/badge/License-MIT-orange)
+A small, focused Windows GUI tool for reliable file transfers using rclone, with optional post-transfer verification (file size and/or checksums). The project is written in Python and uses CustomTkinter for the UI. It is intended to be packaged as a standalone Windows executable (single-file) for easy distribution to non-technical users.
 
-**Professional-grade media transfer application with checksum verification and ASC-MHL manifest generation.**
+This README explains what the tool does, how to run it from source, how to build a standalone EXE, configuration options, verification behavior, and troubleshooting tips.
 
-## ✨ Features
+---
 
-- **Secure File Transfers**: Uses `rclone` with checksum verification for bit-perfect copies
-- **ASC-MHL Compliance**: Automatically generates and verifies ASC Media Hash List manifests
-- **Dual Destination Support**: Transfer to primary and backup destinations simultaneously
-- **Real-time Progress Monitoring**: Live transfer speed, ETA, and current file display
-- **Pre-flight Checks**: Automatic disk space verification and source validation
-- **Parallel Transfers**: Configurable parallel file transfers for optimal performance
-- **Comprehensive Logging**: Detailed transfer logs with timestamps and error tracking
-- **Modern GUI**: Clean, dark-themed interface built with CustomTkinter
-- **Configuration Persistence**: Remembers your frequently used paths and settings
+Table of contents
+- Overview
+- Key features
+- Requirements
+- Running from source
+- Building a standalone Windows EXE
+- Quick usage guide (GUI)
+- Configuration (dit_config.json)
+- Verification details
+- Logs and troubleshooting
+- Packaging notes (rclone and dependencies)
+- Contributing
+- License
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
+Overview
+--------
+The Professional DIT Transfer Tool provides a simple GUI for copying files or folders with rclone under the hood. After a transfer completes the application can automatically verify the destination files against the source using file-size checks, checksums (md5/sha1/sha256/sha512), or both. The tool is optimized for use on Windows and intended for Digital Imaging Technicians (DITs) and similar workflows where integrity is important.
 
-#### Python Packages:
-```bash
-pip install customtkinter
-```
+Key features
+------------
+- Simple, single-window GUI with source/destination selection.
+- Uses rclone to perform high-performance, resumable transfers (the tool requires the rclone executable).
+- Real-time progress parsing and logging of rclone output.
+- Optional post-transfer verification:
+  - Verify file sizes (independent)
+  - Verify checksums (md5/sha1/sha256/sha512)
+  - Verification can run in parallel (thread pool)
+- Lightweight JSON configuration persistence for last paths, transfer settings, and verification preferences.
+- Small on-disk logger written to %APPDATA%\DIT_Pro_Tool\dit_transfer.log.
+- Designed to be packaged into a single-file Windows executable using PyInstaller.
 
-#### System Dependencies:
-- **rclone** ([Download](https://rclone.org/downloads/))
-- **ascmhl** ([Download](https://github.com/ascmitc/mhl))
+Requirements
+------------
+- Windows 10/11 recommended (UI and rclone handling use Windows-specific flags).
+- Python 3.8+ to run from source.
+- rclone executable (rclone.exe) must be bundled or placed next to the app/executable.
+- Python dependencies:
+  - customtkinter
+  - (standard library modules used: tkinter, threading, subprocess, concurrent.futures, hashlib, json, pathlib, etc.)
 
-#### Installation Commands:
+Install dependencies (example)
+- Create a venv (recommended)
+  - python -m venv venv
+  - venv\Scripts\activate
+- Install customtkinter:
+  - pip install customtkinter
 
-**macOS:**
-```bash
-brew install rclone ascmhl
-pip install customtkinter
-```
+Running from source
+-------------------
+1. Ensure `rclone.exe` is available on the system PATH or next to the script (the app prefers a bundled `rclone.exe` using the resource_path helper).
+2. Install dependencies (see Requirements).
+3. Launch:
+   - python dit_offload.py
 
-**Ubuntu/Debian:**
-```bash
-sudo apt install rclone
-sudo apt install python3-tk
-pip install customtkinter
-# Download ascmhl from GitHub releases
-```
+Note: Running from source will open the GUI. The app will write logs and configuration to:
+- %APPDATA%\DIT_Pro_Tool\dit_transfer.log
+- %APPDATA%\DIT_Pro_Tool\dit_config.json
 
-**Windows:**
-1. Install Python 3.7+ from [python.org](https://python.org)
-2. Install packages:
-   ```cmd
-   pip install customtkinter
-   ```
-3. Download `rclone.exe` and `ascmhl` and add to PATH
+Building a standalone Windows EXE
+--------------------------------
+The project is purposely structured for single-file distribution. An example PyInstaller build command (used by the author) is:
 
-### Running the Application
+python -m PyInstaller --noconsole --onefile --collect-all customtkinter --add-binary "rclone.exe;." professional_dit.py
 
-```bash
-git clone https://github.com/yourusername/dit-pro.git
-cd dit-pro
-python dit_offload.py
-```
+Notes:
+- Replace `professional_dit.py` with `dit_offload.py` (or your chosen entrypoint name) if necessary.
+- The `--add-binary "rclone.exe;."` flag bundles rclone.exe into the EXE root so resource_path("rclone.exe") will find it at runtime.
+- Test the built EXE on a clean Windows machine to ensure rclone is located correctly and that no other runtime dependencies are missing.
 
-## 📋 Usage Guide
+Quick usage guide (GUI)
+-----------------------
+1. Source: Browse to a source directory (or file) to copy from.
+2. Destination: Browse to a destination directory (rclone will copy the source into the destination).
+3. Chunk Size: Set buffer size in MiB (used as rclone's --buffer-size).
+4. Transfers: Number of concurrent transfers (rclone `--transfers`).
+5. Verification:
+   - Enable "Verify checksum after transfer" to compute checksums on source and destination for integrity checks.
+   - Enable "Verify file sizes" to require exact file-size matches.
+   - Choose hash algorithm: md5, sha1, sha256, sha512.
+   - Note: File-size verification can be enabled independently of checksum verification — the two checks are not strictly coupled.
+6. Start Transfer: Click "Start Transfer" to begin. The UI displays rclone logs, transfer progress, and verification progress (if enabled).
+7. Stop: Use "Stop" to terminate the transfer. Partial files may remain — see Troubleshooting.
 
-### Basic Workflow
+Configuration (dit_config.json)
+-------------------------------
+A tiny JSON config is saved to %APPDATA%\DIT_Pro_Tool\dit_config.json. Defaults are:
 
-1. **Select Source**: Click "Browse Source" to select your media folder
-2. **Select Destinations**: Choose primary and optional backup destinations
-3. **Configure Options**: Set parallel transfer count (default: 4)
-4. **Start Transfer**: Click "START TRANSFER" to begin
-5. **Monitor Progress**: Watch real-time progress in the right panel
-6. **Verification**: Automatic checksum verification and MHL generation
-
-### Transfer Process
-
-The application follows this secure workflow:
-```
-Source Media → rclone copy (checksum) → Destination → rclone verify → ASC-MHL create → ASC-MHL verify → ✅ Complete
-```
-
-### Log Files
-
-All transfers are logged to `./dit_logs/` with timestamps:
-```
-dit_logs/
-├── transfer_20240115_143022.log
-├── transfer_20240115_152145.log
-└── transfer_20240116_093411.log
-```
-
-## 🛠️ Technical Details
-
-### Architecture
-
-```mermaid
-graph TD
-    A[GUI Interface] --> B[Transfer Engine]
-    B --> C[rclone copy]
-    B --> D[rclone check]
-    B --> E[ascmhl create]
-    B --> F[ascmhl verify]
-    C --> G[File System]
-    D --> G
-    E --> H[MHL Manifest]
-    F --> H
-```
-
-### Key Components
-
-1. **TransferEngine**: Core transfer logic with rclone integration
-2. **DITLogger**: Comprehensive logging system
-3. **ConfigManager**: JSON-based configuration persistence
-4. **ProfessionalDITApp**: Modern GUI with real-time updates
-
-### Verification Methods
-
-- **Checksum Verification**: Uses rclone's built-in checksum comparison
-- **ASC-MHL Compliance**: Industry-standard manifest format for archival
-- **Disk Space Pre-check**: Prevents failed transfers due to insufficient space
-- **File Count Validation**: Ensures source directory is not empty
-
-## 🔧 Configuration
-
-### Settings File (`dit_config.json`)
-```json
 {
-  "src": "/Volumes/CameraCard/",
-  "dst1": "/Volumes/BackupDrive/",
-  "dst2": "/Volumes/SecondBackup/",
-  "transfers": "4"
+  "chunk_size": 10.0,
+  "last_source": "",
+  "last_destination": "",
+  "transfers": 4,
+  "verify_checksum": true,
+  "checksum_algorithm": "md5",
+  "verify_file_size": true
 }
-```
 
-### Command Line Options
-While primarily GUI-based, the tool can be extended with command-line arguments by modifying the source code.
+- chunk_size: float (MiB) used for rclone --buffer-size.
+- transfers: int number of concurrent transfers.
+- verify_checksum: boolean — enable checksum verification after transfer.
+- checksum_algorithm: one of "md5", "sha1", "sha256", "sha512".
+- verify_file_size: boolean — enable file-size verification.
 
-## 📁 Project Structure
+Verification behavior
+---------------------
+- Verification runs after the transfer finishes (if the corresponding verification toggles are enabled).
+- Supported algorithms: md5, sha1, sha256, sha512.
+- The verification engine enumerates source files and compares them to destination files by relative path.
+- File-size verification can be enabled/disabled independently. If file sizes differ, checksum may be skipped (depending on settings).
+- Verification runs in parallel (thread pool). There is a timeout heuristic per-file based on file size (minimum ~300s total or scaled with size).
+- Verification results are reported in the GUI and logged. If failures are found, a concise report is presented (the GUI shows the first up to 10 failures).
 
-```
-dit-pro/
-├── dit_offload.py          # Main application
-├── README.md               # This file
-├── requirements.txt        # Python dependencies
-├── dit_config.json        # Auto-generated user settings
-├── dit_logs/              # Transfer logs directory
-├── screenshots/           # Application screenshots
-└── examples/              # Usage examples
-```
+Logs and troubleshooting
+------------------------
+- Primary log file:
+  - %APPDATA%\DIT_Pro_Tool\dit_transfer.log
+- UI log window displays rclone output and internal INFO/ERROR messages.
+- Common issues:
+  - rclone.exe not found: The app will abort the transfer and log an error. Ensure rclone.exe is bundled with the EXE or available on PATH.
+  - Source or destination path problems: The app runs a pre-flight check. Ensure the source exists and destination parent folder is writable.
+  - Transfer stalls or slow: Check rclone output in the UI; network/back-end problems often manifest there.
+  - Verification timeouts: Very large files can take long to hash; adjust thread counts or allow more time per file.
+- If you see an uncaught exception, check the log file mentioned above for a traceback.
 
-## 🤝 Contributing
+Packaging notes (rclone and dependencies)
+----------------------------------------
+- rclone is a required external binary. The simplest distribution method for Windows EXE is to bundle rclone.exe into the single-file EXE via PyInstaller's --add-binary flag (see Build instructions).
+- customtkinter is required for the UI. The PyInstaller build should include it via --collect-all customtkinter (or equivalent hook).
+- The application uses Windows-specific creation flags (CREATE_NO_WINDOW) when spawning rclone to avoid opening a console window. This is not portable to POSIX systems without modification.
 
-Contributions are welcome! Please follow these steps:
+Security & privacy
+------------------
+- Checksums and file sizes are calculated locally only; no network upload of verification metadata is performed by this tool.
+- The app logs operation details to the local logger. Do not distribute logs that may contain sensitive file names or paths.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+Contributing
+------------
+Contributions are welcome. If you plan to:
+- Add features (e.g., more rclone flags exposed).
+- Improve the verification heuristics (timeouts, thread tuning).
+- Add error recovery or retry logic.
 
-### Development Setup
-```bash
-# Clone and install dev dependencies
-git clone https://github.com/yourusername/dit-pro.git
-cd dit-pro
-pip install -r requirements-dev.txt
-```
+Please open an issue describing the proposed change or submit a PR with tests and a short description.
 
-## 📄 License
+License
+-------
+Specify your license here (e.g., MIT). If none is included, consider adding a LICENSE file.
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Contact / Author
+----------------
+Author: FusinX (GitHub: [FusinX](https://github.com/FusinX))
 
-## 🙏 Acknowledgments
-
-- **rclone** team for the excellent file sync tool
-- **ASC Motion Imaging Technology Council** for the MHL standard
-- **CustomTkinter** developers for the modern UI components
-- **Film industry DITs** worldwide for workflow inspiration
-
-## 🆘 Support
-
-### Common Issues
-
-**"Missing dependencies" error:**
-- Ensure `rclone` and `ascmhl` are in your system PATH
-- Verify installation with `rclone version` and `ascmhl --version`
-
-**Transfer fails with permissions error:**
-- Run as administrator/root if needed
-- Check filesystem permissions on source/destination
-
-**Slow transfer speeds:**
-- Reduce parallel transfers in settings
-- Check disk health and connection speed
-
-### Getting Help
-
-1. Check the [Issues](https://github.com/yourusername/dit-pro/issues) page
-2. Review the logs in `./dit_logs/`
-3. Enable verbose logging in the application
-
-## 📞 Contact
-
-Project Maintainer: [Your Name](mailto:your.email@example.com)
-
-Project Link: [https://github.com/yourusername/dit-pro](https://github.com/yourusername/dit-pro)
+Changelog (high level)
+----------------------
+- v2.0 (current): Optimized verification handling, independent file-size verification, UI improvements, config rename (scale -> chunk_size), minor cleanup.
 
 ---
 
-**⚠️ Important Note:** Always verify your transfers manually for critical media. This tool provides additional verification but should not replace proper media management procedures.
-
----
-
-*Made with ❤️ for the film and media industry*
+If you want, I can:
+- Add a sample LICENSE (MIT) file.
+- Produce a changelog or release notes draft.
+- Create a simple CONTRIBUTING.md with development steps and PyInstaller build recipe.
