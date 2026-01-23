@@ -2,8 +2,6 @@
 
 A small, focused Windows GUI tool for reliable file transfers using rclone, with optional post-transfer verification (file size and/or checksums). The project is written in Python and uses CustomTkinter for the UI. It is intended to be packaged as a standalone Windows executable (single-file) for easy distribution to non-technical users.
 
-This README explains what the tool does, how to run it from source, how to build a standalone EXE, configuration options, verification behavior, and troubleshooting tips.
-
 ---
 
 Table of contents
@@ -73,7 +71,6 @@ The project is purposely structured for single-file distribution. An example PyI
 python -m PyInstaller --noconsole --onefile --collect-all customtkinter --add-binary "rclone.exe;." professional_dit.py
 
 Notes:
-- Replace `professional_dit.py` with `dit_offload.py` (or your chosen entrypoint name) if necessary.
 - The `--add-binary "rclone.exe;."` flag bundles rclone.exe into the EXE root so resource_path("rclone.exe") will find it at runtime.
 - Test the built EXE on a clean Windows machine to ensure rclone is located correctly and that no other runtime dependencies are missing.
 
@@ -165,8 +162,3 @@ Changelog (high level)
 - v2.0 (current): Optimized verification handling, independent file-size verification, UI improvements, config rename (scale -> chunk_size), minor cleanup.
 
 ---
-
-If you want, I can:
-- Add a sample LICENSE (MIT) file.
-- Produce a changelog or release notes draft.
-- Create a simple CONTRIBUTING.md with development steps and PyInstaller build recipe.
